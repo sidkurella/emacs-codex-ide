@@ -1,0 +1,52 @@
+#+TITLE: codex-ide
+
+Minimal Emacs wrapper around the Codex app-server protocol.
+
+* Scope
+
+This package is intentionally smaller than =claude-code-ide=. It provides:
+
+- one app-server-backed Codex session per project
+- a normal Emacs session buffer instead of a terminal emulator
+- window toggling and session switching
+- minibuffer prompt sending
+- a transient menu for common operations
+- Emacs-side active-buffer tracking that can be folded into prompts
+
+It does not attempt to reimplement Claude's full MCP, diagnostics, or diff
+tooling, but it can optionally expose a small Emacs-focused MCP bridge back to
+Codex.
+
+* Suggested setup
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path (expand-file-name "~/.emacs.d/lib/local/codex-ide"))
+
+(use-package codex-ide
+  :bind ("C-c C-;" . codex-ide-menu)
+  :custom
+  (codex-ide-use-side-window nil))
+#+end_src
+
+* Optional Emacs MCP bridge
+
+Set =codex-ide-enable-emacs-tool-bridge= to non-nil if you want Codex to call
+back into the running Emacs instance through a small MCP bridge.
+
+#+begin_src emacs-lisp
+(use-package codex-ide
+  :custom
+  (codex-ide-enable-emacs-tool-bridge t)
+  (codex-ide-emacs-bridge-command-whitelist
+   '(save-buffer other-window delete-other-windows)))
+#+end_src
+
+When enabled, codex-ide:
+
+- ensures the current Emacs instance is reachable via =emacsclient=
+- registers a per-session MCP server with =codex app-server=
+- exposes tools for current buffer context, opening files, and running allowed
+  interactive commands
+
+Set =codex-ide-emacs-bridge-allow-eval= only if you explicitly want
+unrestricted Elisp evaluation from Codex.
