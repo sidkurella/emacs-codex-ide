@@ -1,21 +1,46 @@
 #+TITLE: codex-ide
 
-Minimal Emacs wrapper around the Codex app-server protocol.
+Emacs-native interface for the Codex app-server protocol.
+
+Inspired by =claude-code-ide=, but now opinionated in a different direction:
+
+- codex-ide renders Codex in pure Emacs rather than embedding a terminal
+  emulator such as =vterm= or =eat=
+- codex-ide has full control of, and awareness of, the running Emacs session
+  through an Emacs MCP bridge
+- codex-ide provides a dedicated major mode for navigating the full Codex
+  session as normal Emacs text, using standard movement, search, editing, and
+  buffer navigation commands
 
 * Scope
 
-This package is intentionally smaller than =claude-code-ide=. It provides:
+codex-ide currently provides:
 
 - one app-server-backed Codex session per project
 - a normal Emacs session buffer instead of a terminal emulator
+- dedicated major modes for Codex session and log buffers
 - window toggling and session switching
 - minibuffer prompt sending
+- prompt submission that can reuse an existing visible Codex window
 - a transient menu for common operations
 - Emacs-side active-buffer tracking that can be folded into prompts
+- lightweight markdown rendering for links, inline code, and fenced code blocks
+- syntax-highlighted fenced code blocks using Emacs major modes when available
 
-It does not attempt to reimplement Claude's full MCP, diagnostics, or diff
-tooling, but it can optionally expose a small Emacs-focused MCP bridge back to
-Codex.
+codex-ide does not try to recreate an IDE inside a terminal buffer.  Instead,
+it leans on Emacs itself as the IDE surface.  That means a lot of workflows are
+handled in a more native and often more powerful way through existing Emacs
+buffers, windows, modes, and commands.
+
+For example, diff review does not need a custom in-chat diff UI.  You can view
+a diff in Emacs using your usual tools, then send a prompt that refers to the
+diff currently on screen.  Because codex-ide tracks the active Emacs buffer and
+cursor position, Codex can observe the diff you are looking at and respond in
+terms of the actual editor state rather than a separate embedded interface.
+
+That same pattern applies more broadly: codex-ide focuses on a strong
+Emacs-native Codex session, rich transcript rendering, and a bridge that lets
+the agent work with the editor you are already using instead of replacing it.
 
 * Suggested setup
 
@@ -31,7 +56,7 @@ Codex.
 * Optional Emacs MCP bridge
 
 Set =codex-ide-enable-emacs-tool-bridge= to non-nil if you want Codex to call
-back into the running Emacs instance through a small MCP bridge.
+back into the running Emacs instance through the built-in Emacs MCP bridge.
 
 #+begin_src emacs-lisp
 (use-package codex-ide
@@ -46,7 +71,7 @@ When enabled, codex-ide:
 - ensures the current Emacs instance is reachable via =emacsclient=
 - registers a per-session MCP server with =codex app-server=
 - exposes tools for current buffer context, opening files, and running allowed
-  interactive commands
+  interactive commands inside the live Emacs session
 
 Set =codex-ide-emacs-bridge-allow-eval= only if you explicitly want
 unrestricted Elisp evaluation from Codex.
