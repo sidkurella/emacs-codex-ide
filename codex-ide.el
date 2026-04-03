@@ -456,6 +456,39 @@ current buffer's project directory."
            session
            codex-ide--sessions))
 
+(defun codex-ide--has-live-sessions-p ()
+  "Return non-nil when any tracked Codex session still has a live process."
+  (let ((found nil))
+    (maphash
+     (lambda (_directory session)
+       (when (process-live-p (codex-ide-session-process session))
+         (setq found t)))
+     codex-ide--sessions)
+    found))
+
+(define-minor-mode codex-ide-track-active-buffer-mode
+  "Globally track the active Emacs file buffer for Codex sessions."
+  :global t
+  :group 'codex-ide
+  (if codex-ide-track-active-buffer-mode
+      (progn
+        (add-hook 'window-buffer-change-functions #'codex-ide--track-active-buffer)
+        (add-hook 'window-selection-change-functions #'codex-ide--track-active-buffer)
+        (add-hook 'post-command-hook #'codex-ide--track-active-buffer-post-command))
+    (remove-hook 'window-buffer-change-functions #'codex-ide--track-active-buffer)
+    (remove-hook 'window-selection-change-functions #'codex-ide--track-active-buffer)
+    (remove-hook 'post-command-hook #'codex-ide--track-active-buffer-post-command)))
+
+(defun codex-ide--ensure-active-buffer-tracking ()
+  "Enable active buffer tracking for Codex session management."
+  (unless codex-ide-track-active-buffer-mode
+    (codex-ide-track-active-buffer-mode 1)))
+
+(defun codex-ide--maybe-disable-active-buffer-tracking ()
+  "Disable active buffer tracking when no live Codex sessions remain."
+  (unless (codex-ide--has-live-sessions-p)
+    (codex-ide-track-active-buffer-mode -1)))
+
 (defun codex-ide--cleanup-dead-sessions ()
   "Remove stale sessions from `codex-ide--sessions'."
   (maphash
@@ -463,7 +496,8 @@ current buffer's project directory."
      (unless (process-live-p (codex-ide-session-process session))
        (codex-ide-log-message session "Cleaning up dead session entry for %s" directory)
        (remhash directory codex-ide--sessions)))
-   codex-ide--sessions))
+   codex-ide--sessions)
+  (codex-ide--maybe-disable-active-buffer-tracking))
 
 (defun codex-ide--cleanup-session (&optional session)
   "Drop internal state for SESSION's working directory."
@@ -475,7 +509,8 @@ current buffer's project directory."
       (remhash session codex-ide--session-metadata))
     (remhash directory codex-ide--sessions)
     (remhash directory codex-ide--active-buffer-contexts)
-    (remhash directory codex-ide--last-sent-buffer-contexts)))
+    (remhash directory codex-ide--last-sent-buffer-contexts)
+    (codex-ide--maybe-disable-active-buffer-tracking)))
 
 (defun codex-ide--teardown-session (session &optional kill-log-buffer)
   "Stop SESSION and clear its internal state.
@@ -1896,6 +1931,7 @@ MODE can be nil or `new', `continue', or `resume'."
   (unless (codex-ide--ensure-cli)
     (user-error "Codex CLI not available. Install it and ensure it is on PATH"))
   (codex-ide--cleanup-dead-sessions)
+  (codex-ide--ensure-active-buffer-tracking)
   (codex-ide-bridge-prompt-to-enable)
   (codex-ide-bridge-ensure-server)
   (let* ((working-dir (codex-ide--get-working-directory))
@@ -2626,9 +2662,5 @@ If no live session exists for the current buffer, prompt to start one first."
       (user-error "No recent Codex session to toggle")))))
 
 (provide 'codex-ide)
-
-(add-hook 'window-buffer-change-functions #'codex-ide--track-active-buffer)
-(add-hook 'window-selection-change-functions #'codex-ide--track-active-buffer)
-(add-hook 'post-command-hook #'codex-ide--track-active-buffer-post-command)
 
 ;;; codex-ide.el ends here
