@@ -171,6 +171,14 @@
   :type 'number
   :group 'codex-ide)
 
+(defcustom codex-ide-log-max-lines 10000
+  "Maximum number of lines to keep in each Codex log buffer.
+
+When a log buffer grows beyond this limit, older lines are removed from the
+top of the buffer."
+  :type 'integer
+  :group 'codex-ide)
+
 (defcustom codex-ide-include-active-buffer-context 'when-changed
   "How `codex-ide' should include Emacs active-buffer context in prompts.
 When set to `when-changed', include the active file context only when it has
@@ -295,10 +303,6 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (defun make-codex-ide-session (&rest initargs)
   "Create a `codex-ide-session' object with INITARGS."
   (apply #'make-instance 'codex-ide-session initargs))
-
-(defun codex-ide-session-p (object)
-  "Return non-nil when OBJECT is a `codex-ide-session'."
-  (object-of-class-p object 'codex-ide-session))
 
 (defvar codex-ide-session-mode-map
   (let ((map (make-sparse-keymap)))
@@ -704,6 +708,23 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
              match-start match-end
              `(display ,label))))))))
 
+(defun codex-ide--trim-log-buffer ()
+  "Trim the current log buffer to `codex-ide-log-max-lines' lines."
+  (when (> codex-ide-log-max-lines 0)
+    (let ((line-count (count-lines (point-min) (point-max))))
+      (when (> line-count codex-ide-log-max-lines)
+        (let ((excess (- line-count codex-ide-log-max-lines))
+              (point-marker (copy-marker (point) t))
+              (moving (= (point) (point-max))))
+          (save-excursion
+            (goto-char (point-min))
+            (forward-line excess)
+            (delete-region (point-min) (point)))
+          (if moving
+              (goto-char (point-max))
+            (goto-char (marker-position point-marker)))
+          (set-marker point-marker nil))))))
+
 (defun codex-ide-log-message (session format-string &rest args)
   "Append a formatted log message for SESSION.
 FORMAT-STRING and ARGS are passed to `format'."
@@ -717,6 +738,7 @@ FORMAT-STRING and ARGS are passed to `format'."
         (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
         (insert (apply #'format format-string args))
         (insert "\n")
+        (codex-ide--trim-log-buffer)
         (when moving
           (goto-char (point-max)))))))
 
