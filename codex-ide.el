@@ -60,6 +60,31 @@
   "Face used for item detail lines."
   :group 'codex-ide)
 
+(defface codex-ide-file-diff-header-face
+  '((t :inherit font-lock-keyword-face))
+  "Face used for file-change diff headers."
+  :group 'codex-ide)
+
+(defface codex-ide-file-diff-hunk-face
+  '((t :inherit diff-hunk-header))
+  "Face used for file-change diff hunk lines."
+  :group 'codex-ide)
+
+(defface codex-ide-file-diff-added-face
+  '((t :inherit diff-added))
+  "Face used for added lines in file-change diffs."
+  :group 'codex-ide)
+
+(defface codex-ide-file-diff-removed-face
+  '((t :inherit diff-removed))
+  "Face used for removed lines in file-change diffs."
+  :group 'codex-ide)
+
+(defface codex-ide-file-diff-context-face
+  '((t :inherit fixed-pitch))
+  "Face used for context lines in file-change diffs."
+  :group 'codex-ide)
+
 (defface codex-ide-header-line-face
   '((t :inherit (header-line font-lock-comment-face) :weight light :height 0.9))
   "Face used for the Codex session header line."
@@ -1063,6 +1088,67 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
              (split-string text "\n")
              ""))
 
+(defun codex-ide--file-change-diff-face (line)
+  "Return the face to use for file-change diff LINE."
+  (cond
+   ((string-prefix-p "@@" line) 'codex-ide-file-diff-hunk-face)
+   ((or (string-prefix-p "diff --git" line)
+        (string-prefix-p "--- " line)
+        (string-prefix-p "+++ " line)
+        (string-prefix-p "index " line))
+    'codex-ide-file-diff-header-face)
+   ((string-prefix-p "+" line) 'codex-ide-file-diff-added-face)
+   ((string-prefix-p "-" line) 'codex-ide-file-diff-removed-face)
+   (t 'codex-ide-file-diff-context-face)))
+
+(defun codex-ide--render-file-change-diff-text (buffer text)
+  "Render file-change diff TEXT into BUFFER."
+  (when (and (stringp text)
+             (not (string-empty-p text)))
+    (let ((trimmed (string-trim-right text)))
+      (unless (string-empty-p trimmed)
+        (codex-ide--append-to-buffer
+         buffer
+         (codex-ide--item-detail-line "diff:")
+         'codex-ide-item-detail-face)
+        (dolist (line (split-string trimmed "\n"))
+          (codex-ide--append-to-buffer
+           buffer
+           (codex-ide--item-detail-line line)
+           (codex-ide--file-change-diff-face line)))))))
+
+(defun codex-ide--file-change-diff-text (item)
+  "Extract a human-readable diff string from file-change ITEM."
+  (let ((item-diff
+         (or (alist-get 'diff item)
+             (alist-get 'patch item)
+             (alist-get 'output item)
+             (alist-get 'text item))))
+    (cond
+     ((and (stringp item-diff)
+           (not (string-empty-p item-diff)))
+      item-diff)
+     (t
+      (string-join
+       (delq nil
+             (mapcar
+              (lambda (change)
+                (let ((path (alist-get 'path change))
+                      (diff (or (alist-get 'diff change)
+                                (alist-get 'patch change)
+                                (alist-get 'output change)
+                                (alist-get 'text change))))
+                  (when (and (stringp diff)
+                             (not (string-empty-p diff)))
+                    (if (and path
+                             (not (string-match-p
+                                   (regexp-quote (format "+++ %s" path))
+                                   diff)))
+                        (format "diff -- %s\n%s" path diff)
+                      diff))))
+              (or (alist-get 'changes item) '())))
+       "\n")))))
+
 (defun codex-ide--summarize-item-start (item)
   "Build a one-line summary for ITEM start notifications."
   (let ((item-type (alist-get 'type item)))
@@ -1269,6 +1355,15 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
           buffer
           (codex-ide--item-detail-line "tool call failed")
           'error)))
+      ("fileChange"
+       (let ((diff-text (codex-ide--file-change-diff-text item))
+             (streamed-diff (plist-get state :diff-text)))
+         (codex-ide--render-file-change-diff-text
+          buffer
+          (if (and (stringp diff-text)
+                   (not (string-empty-p diff-text)))
+              diff-text
+            streamed-diff))))
       ("exitedReviewMode"
        (when-let ((review (alist-get 'review item)))
          (codex-ide--append-to-buffer
@@ -1895,7 +1990,13 @@ CHOICES is an alist of labels to returned values."
           session
           "File-change delta for item %s (%d chars)"
           item-id
-          (length delta))))
+          (length delta))
+         (when-let ((state (codex-ide--item-state session item-id)))
+           (codex-ide--put-item-state
+            session
+            item-id
+            (plist-put state :diff-text
+                       (concat (or (plist-get state :diff-text) "") delta))))))
       ("item/plan/delta"
        (codex-ide-log-message
         session
