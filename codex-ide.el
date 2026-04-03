@@ -316,7 +316,7 @@ Add this variable to `savehist-additional-variables' to persist it.")
 
 (define-key codex-ide-session-mode-map (kbd "C-c C-c") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-c RET") #'codex-ide-submit)
-(define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-send-escape)
+(define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-c C-o") #'codex-ide-send-active-buffer-context)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
@@ -558,6 +558,28 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
       (set-window-dedicated-p window t))
     window))
 
+(defun codex-ide--display-buffer-in-codex-window (buffer)
+  "Show BUFFER in an existing Codex window when possible.
+Prefer a window already displaying BUFFER.  Otherwise reuse any visible Codex
+window by switching it to BUFFER.  Fall back to creating a new Codex window."
+  (or (get-buffer-window buffer)
+      (when-let ((window
+                  (seq-find
+                   (lambda (candidate)
+                     (codex-ide--session-buffer-p (window-buffer candidate)))
+                   (window-list nil 'no-minibuf))))
+        (let ((was-dedicated (window-dedicated-p window)))
+          (when was-dedicated
+            (set-window-dedicated-p window nil))
+          (set-window-buffer window buffer)
+          (when was-dedicated
+            (set-window-dedicated-p window was-dedicated))
+          (setq codex-ide--last-accessed-buffer buffer)
+          (when codex-ide-focus-on-open
+            (select-window window))
+          window))
+      (codex-ide--display-buffer-in-side-window buffer)))
+
 (defun codex-ide--make-region-writable (start end)
   "Make the region from START to END writable."
   (when (< start end)
@@ -665,32 +687,24 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
      codex-ide-column nil
      codex-ide-markdown nil)))
 
+(defun codex-ide--normalize-markdown-link-label (label)
+  "Return LABEL with markdown code delimiters stripped when present."
+  (save-match-data
+    (if (string-match "\\``\\([^`\n]+\\)`\\'" label)
+        (match-string 1 label)
+      label)))
+
 (defun codex-ide--render-markdown-region (start end)
   "Apply lightweight markdown rendering between START and END."
   (save-excursion
     (let ((inhibit-read-only t))
       (codex-ide--clear-markdown-properties start end)
       (goto-char start)
-      (while (re-search-forward "`\\([^`\n]+\\)`" end t)
-        (let ((code-start (match-beginning 1))
-              (code-end (match-end 1)))
-          (add-text-properties
-           code-start code-end
-           '(face font-lock-keyword-face
-             codex-ide-markdown t))
-          (add-text-properties
-           (match-beginning 0) code-start
-           '(display ""
-             codex-ide-markdown t))
-          (add-text-properties
-           code-end (match-end 0)
-           '(display ""
-             codex-ide-markdown t))))
-      (goto-char start)
       (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\(/[^)\n]+\\))\\)" end t)
         (let* ((match-start (match-beginning 1))
                (match-end (match-end 1))
                (label (match-string-no-properties 2))
+               (display-label (codex-ide--normalize-markdown-link-label label))
                (target (match-string-no-properties 3))
                (parsed (codex-ide--parse-file-link-target target)))
           (when parsed
@@ -706,7 +720,25 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
              'codex-ide-column (nth 2 parsed))
             (add-text-properties
              match-start match-end
-             `(display ,label))))))))
+             `(display ,display-label)))))
+      (goto-char start)
+      (while (re-search-forward "`\\([^`\n]+\\)`" end t)
+        (unless (or (get-text-property (match-beginning 0) 'codex-ide-markdown)
+                    (get-text-property (1- (match-end 0)) 'codex-ide-markdown))
+          (let ((code-start (match-beginning 1))
+                (code-end (match-end 1)))
+            (add-text-properties
+             code-start code-end
+             '(face font-lock-keyword-face
+               codex-ide-markdown t))
+            (add-text-properties
+             (match-beginning 0) code-start
+             '(display ""
+               codex-ide-markdown t))
+            (add-text-properties
+             code-end (match-end 0)
+             '(display ""
+               codex-ide-markdown t))))))))
 
 (defun codex-ide--trim-log-buffer ()
   "Trim the current log buffer to `codex-ide-log-max-lines' lines."
@@ -2201,6 +2233,16 @@ CHOICES is an alist of labels to returned values."
       (user-error "No Codex session for this buffer or project"))
     session))
 
+(defun codex-ide--ensure-session-for-current-project ()
+  "Return the active session for the current buffer or project.
+If no live session exists, prompt to start one."
+  (or (let ((session (codex-ide--get-default-session-for-current-buffer)))
+        (when (and session (process-live-p (codex-ide-session-process session)))
+          session))
+      (when (y-or-n-p "No Codex session for this buffer. Start one? ")
+        (codex-ide--start-session 'new))
+      (codex-ide--session-for-current-project)))
+
 ;;;###autoload
 (defun codex-ide ()
   "Start Codex for the current project or directory."
@@ -2341,16 +2383,30 @@ CHOICES is an alist of labels to returned values."
           (message "Sent interrupt to Codex"))
       (user-error "No active Codex turn to interrupt"))))
 
-;;;###autoload
-(defalias 'codex-ide-send-escape #'codex-ide-interrupt)
-
-;;;###autoload
 (defun codex-ide-insert-newline ()
   "Open a prompt in the minibuffer that supports literal newlines."
   (interactive)
   (let ((prompt (read-from-minibuffer "Codex prompt (RET inserts newline, C-j to submit): ")))
     (unless (string-empty-p prompt)
-      (codex-ide-send-prompt prompt))))
+      (codex-ide--submit-prompt prompt))))
+
+;;;###autoload
+(defun codex-ide-prompt ()
+  "Prompt for a Codex message in the minibuffer and submit it from the Codex buffer.
+If no live session exists for the current buffer, prompt to start one first."
+  (interactive)
+  (let ((session (codex-ide--ensure-session-for-current-project)))
+    (let ((prompt (read-from-minibuffer
+                   "Codex prompt (RET inserts newline, C-j to submit): ")))
+      (unless (string-empty-p prompt)
+        (let* ((buffer (codex-ide-session-buffer session))
+               (window (codex-ide--display-buffer-in-codex-window buffer)))
+          (with-selected-window window
+            (with-current-buffer buffer
+              (if (codex-ide-session-input-overlay session)
+                  (codex-ide--replace-current-input session prompt)
+                (codex-ide--insert-input-prompt session prompt))
+              (codex-ide--submit-prompt))))))))
 
 ;;;###autoload
 (defun codex-ide-previous-prompt-history ()
@@ -2376,9 +2432,8 @@ CHOICES is an alist of labels to returned values."
   (interactive)
   (codex-ide--goto-prompt-line 1))
 
-;;;###autoload
-(defun codex-ide-send-prompt (&optional prompt)
-  "Send PROMPT to the current Codex session."
+(defun codex-ide--submit-prompt (&optional prompt)
+  "Submit PROMPT to the current Codex session."
   (interactive)
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
@@ -2418,7 +2473,7 @@ CHOICES is an alist of labels to returned values."
 (defun codex-ide-submit ()
   "Submit the current in-buffer prompt to Codex."
   (interactive)
-  (codex-ide-send-prompt))
+  (codex-ide--submit-prompt))
 
 ;;;###autoload
 (defun codex-ide-send-active-buffer-context ()
@@ -2439,7 +2494,7 @@ CHOICES is an alist of labels to returned values."
        session
        "Sending active buffer context for %s"
        (alist-get 'display-file context))
-      (codex-ide-send-prompt (codex-ide--format-buffer-context context))
+      (codex-ide--submit-prompt (codex-ide--format-buffer-context context))
       (message "Sent active buffer context to Codex")))))
 
 ;;;###autoload

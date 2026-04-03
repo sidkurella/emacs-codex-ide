@@ -14,13 +14,12 @@
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-resume "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
+(declare-function codex-ide-prompt "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-list-sessions "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
-(declare-function codex-ide-send-prompt "codex-ide" (&optional prompt))
 (declare-function codex-ide-send-active-buffer-context "codex-ide" ())
 (declare-function codex-ide-interrupt "codex-ide" ())
-(declare-function codex-ide-send-escape "codex-ide" ())
 (declare-function codex-ide-insert-newline "codex-ide" ())
 (declare-function codex-ide-toggle "codex-ide" ())
 (declare-function codex-ide-toggle-recent "codex-ide" ())
@@ -229,11 +228,11 @@
     ("q" "Stop current session" codex-ide-stop)
     ("l" "List sessions" codex-ide-list-sessions)]
    ["Navigation"
-    ("b" "Switch to Codex buffer" codex-ide-switch-to-buffer)
+   ("b" "Switch to Codex buffer" codex-ide-switch-to-buffer)
     ("w" "Toggle current window" codex-ide-toggle)
     ("W" "Toggle recent window" codex-ide-toggle-recent)]
    ["Interaction"
-    ("p" "Send prompt from minibuffer" codex-ide-send-prompt)
+    ("p" "Prompt from minibuffer" codex-ide-prompt)
     ("i" "Send active buffer context" codex-ide-send-active-buffer-context)
     ("e" "Interrupt turn" codex-ide-interrupt)
     ("n" "Insert newline" codex-ide-insert-newline)]
