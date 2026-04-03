@@ -554,15 +554,27 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
       (set-window-dedicated-p window t))
     window))
 
+(defun codex-ide--make-region-writable (start end)
+  "Make the region from START to END writable."
+  (when (< start end)
+    (remove-text-properties start end
+                            '(read-only t
+                              rear-nonsticky (read-only)
+                              front-sticky (read-only)))))
+
 (defun codex-ide--append-to-buffer (buffer text &optional face)
-  "Append TEXT to BUFFER, optionally using FACE."
+  "Append TEXT to BUFFER as read-only transcript text, optionally using FACE."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((moving (= (point) (point-max))))
+      (let ((inhibit-read-only t)
+            (moving (= (point) (point-max)))
+            start)
         (goto-char (point-max))
+        (setq start (point))
         (if face
             (insert (propertize text 'face face))
           (insert text))
+        (codex-ide--freeze-region start (point))
         (when moving
           (goto-char (point-max)))))))
 
@@ -570,18 +582,22 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
   "Ensure BUFFER is ready for a new rendered output block."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (goto-char (point-max))
-      (cond
-       ((= (point) (point-min)))
-       ((and (eq (char-before (point)) ?\n)
-             (save-excursion
-               (forward-char -1)
-               (or (bobp)
-                   (eq (char-before (point)) ?\n)))))
-       ((eq (char-before (point)) ?\n)
-        (insert "\n"))
-       (t
-        (insert "\n\n"))))))
+      (let ((inhibit-read-only t)
+            start)
+        (goto-char (point-max))
+        (setq start (point))
+        (cond
+         ((= (point) (point-min)))
+         ((and (eq (char-before (point)) ?\n)
+               (save-excursion
+                 (forward-char -1)
+                 (or (bobp)
+                     (eq (char-before (point)) ?\n)))))
+         ((eq (char-before (point)) ?\n)
+          (insert "\n"))
+         (t
+          (insert "\n\n")))
+        (codex-ide--freeze-region start (point))))))
 
 (defun codex-ide--output-separator-string ()
   "Return the separator rule used between transcript sections."
@@ -698,7 +714,12 @@ FORMAT-STRING and ARGS are passed to `format'."
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
   (when (< start end)
-    (add-text-properties start end '(read-only t rear-nonsticky (read-only)))))
+    (remove-text-properties start end
+                            '(read-only nil
+                              rear-nonsticky nil
+                              front-sticky nil))
+    (add-text-properties start end '(read-only t
+                                     front-sticky (read-only)))))
 
 (defun codex-ide--delete-input-overlay (session)
   "Delete the active input overlay for SESSION, if any."
@@ -921,20 +942,27 @@ Optionally seed it with INITIAL-TEXT."
   (let ((buffer (codex-ide-session-buffer session)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (let ((moving (= (point) (point-max))))
+        (let ((inhibit-read-only t)
+              (moving (= (point) (point-max)))
+              transcript-start
+              prompt-start)
           (goto-char (point-max))
+          (setq transcript-start (point))
           (unless (or (= (point) (point-min))
                       (bolp))
             (insert "\n"))
+          (codex-ide--freeze-region transcript-start (point))
           (codex-ide--delete-input-overlay session)
           (setf (codex-ide-session-input-prompt-start-marker session)
                 (copy-marker (point)))
+          (setq prompt-start (point))
           (insert (propertize "> " 'face 'codex-ide-user-prompt-face))
           (setf (codex-ide-session-input-start-marker session)
                 (copy-marker (point)))
           (codex-ide--reset-prompt-history-navigation session)
           (when initial-text
             (insert initial-text))
+          (codex-ide--make-region-writable prompt-start (point))
           (let ((overlay (make-overlay
                           (marker-position
                            (codex-ide-session-input-prompt-start-marker session))
@@ -1065,16 +1093,20 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
   (let ((buffer (codex-ide-session-buffer session)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (when-let ((start (codex-ide-session-input-prompt-start-marker session)))
+        (let ((inhibit-read-only t)
+              spacing-start)
+          (when-let ((start (codex-ide-session-input-prompt-start-marker session)))
           (codex-ide--style-user-prompt-region start (point-max))
           (codex-ide--freeze-region start (point-max)))
-        (codex-ide--delete-input-overlay session)
-        (codex-ide--sync-prompt-minor-mode session)
-        (goto-char (point-max))
-        (insert "\n\n")
-        (setf (codex-ide-session-output-prefix-inserted session) t
-              (codex-ide-session-status session) "running")
-        (codex-ide--update-header-line session)))))
+          (codex-ide--delete-input-overlay session)
+          (codex-ide--sync-prompt-minor-mode session)
+          (goto-char (point-max))
+          (setq spacing-start (point))
+          (insert "\n\n")
+          (codex-ide--freeze-region spacing-start (point))
+          (setf (codex-ide-session-output-prefix-inserted session) t
+                (codex-ide-session-status session) "running")
+          (codex-ide--update-header-line session))))))
 
 (defun codex-ide--item-state (&optional session item-id)
   "Return tracked state for ITEM-ID in SESSION."
@@ -1673,7 +1705,8 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
         (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
         (erase-buffer)
         (insert (format "Codex session for %s\n\n"
-                        (abbreviate-file-name working-dir))))
+                        (abbreviate-file-name working-dir)))
+        (codex-ide--freeze-region (point-min) (point-max)))
       (with-current-buffer log-buffer
         (codex-ide-log-mode)
         (setq-local default-directory working-dir)
