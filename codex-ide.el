@@ -316,8 +316,8 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (define-key codex-ide-session-mode-map (kbd "C-c C-o") #'codex-ide-send-active-buffer-context)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
-(define-key codex-ide-session-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
-(define-key codex-ide-session-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
 
 (define-minor-mode codex-ide-session-prompt-minor-mode
   "Minor mode enabled only while point is in the active Codex prompt."
