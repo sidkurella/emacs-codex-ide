@@ -53,9 +53,40 @@ editor automation when you explicitly opt into it.
 
 ** Screenshots
 
-#+begin_quote
-Screenshots coming soon.
-#+end_quote
+The screenshots below show the current UI running inside Emacs, with Codex
+rendered as a native buffer rather than a terminal pane.
+
+*** Prompting and Approvals
+
+Session buffers support in-place prompt editing, streamed responses, and
+approval flows for actions that need confirmation.
+
+#+CAPTION: Prompt submission and in-buffer approval handling inside a Codex session.
+[[file:screenshots/codex-prompts-in-emacs.png]]
+
+*** Syntax-Highlighted Code Blocks
+
+Assistant-generated fenced code blocks are rendered directly in the transcript
+and fontified using an appropriate Emacs major mode when one is available.
+
+#+CAPTION: Python output rendered in the session buffer with syntax highlighting.
+[[file:screenshots/code-syntax-coloring.png]]
+
+*** Buffer-Aware Context
+
+Codex IDE tracks the active project buffer so prompts can carry file, line, and
+cursor context from the editor you are already using.
+
+#+CAPTION: A Codex session alongside Magit, with the active editor buffer reflected in the session context.
+[[file:screenshots/buffer-selection-awareness.png]]
+
+*** Clickable File Links
+
+Transcript file references are turned into clickable links so you can jump from
+assistant output straight into the corresponding file and location.
+
+#+CAPTION: Clickable file links in the session transcript opening source locations in Emacs.
+[[file:screenshots/clickable-code-links.png]]
 
 * Installation
 
