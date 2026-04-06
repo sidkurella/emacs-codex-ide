@@ -18,6 +18,7 @@
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the codex-ide bridge files.")
 
+;;;###autoload
 (defcustom codex-ide-enable-emacs-tool-bridge nil
   "Whether codex-ide should expose Emacs tools to Codex via MCP.
 
@@ -26,21 +27,25 @@ and ensures the current Emacs instance is reachable via `emacsclient'."
   :type 'boolean
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-tool-bridge-name "emacs"
   "Name used when registering the Emacs MCP bridge with Codex."
   :type 'string
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-python-command "python3"
   "Python executable used to launch the standalone Emacs MCP bridge."
   :type 'string
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-emacsclient-command "emacsclient"
   "Path to the `emacsclient' executable used by the bridge."
   :type 'string
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-script-path nil
   "Path to the standalone Emacs MCP bridge script.
 
@@ -49,6 +54,7 @@ When nil, codex-ide uses `codex-ide-mcp.py' from the package directory."
                  (file :tag "Bridge script"))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-server-name nil
   "Server name the bridge should use with `emacsclient'.
 
@@ -57,6 +63,7 @@ When nil, use the current value of `server-name'."
                  (string :tag "Named server"))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-suppress-server-start-prompts nil
   "When non-nil, start the Emacs server for the bridge without prompting.
 
@@ -66,6 +73,7 @@ bridge starts the Emacs server automatically when needed."
   :type 'boolean
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-command-whitelist '(save-buffer)
   "Interactive Emacs commands exposed through the MCP bridge.
 
@@ -74,16 +82,19 @@ prompting for extra input."
   :type '(repeat function)
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-allow-eval nil
   "Whether to expose an unrestricted Elisp eval tool to Codex."
   :type 'boolean
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-startup-timeout 10
   "Startup timeout in seconds for the Emacs MCP bridge."
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-emacs-bridge-tool-timeout 60
   "Tool-call timeout in seconds for the Emacs MCP bridge."
   :type 'integer
@@ -114,20 +125,24 @@ prompting for extra input."
   "Return the emacsclient server name the bridge should target."
   (or codex-ide-emacs-bridge-server-name server-name))
 
+;;;###autoload
 (defun codex-ide-bridge-enabled-p ()
   "Return non-nil when the Emacs MCP bridge should be enabled."
   codex-ide-enable-emacs-tool-bridge)
 
+;;;###autoload
 (defun codex-ide-bridge-enable ()
   "Enable the Emacs MCP bridge and ensure the target Emacs server is running."
   (setq codex-ide-enable-emacs-tool-bridge t)
   (codex-ide-bridge-ensure-server))
 
+;;;###autoload
 (defun codex-ide-bridge-disable ()
   "Disable the Emacs MCP bridge."
   (setq codex-ide-enable-emacs-tool-bridge nil)
   codex-ide-enable-emacs-tool-bridge)
 
+;;;###autoload
 (defun codex-ide-bridge-prompt-to-enable ()
   "Prompt once to enable the Emacs MCP bridge for session startup."
   (when (and (not (codex-ide-bridge-enabled-p))
@@ -139,6 +154,7 @@ prompting for extra input."
 Errors from `server-running-p' are treated as nil."
   (server-running-p target-server-name))
 
+;;;###autoload
 (defun codex-ide-bridge-status ()
   "Return an alist describing the current Emacs bridge configuration."
   (let* ((enabled (codex-ide-bridge-enabled-p))
@@ -167,6 +183,7 @@ Errors from `server-running-p' are treated as nil."
       (serverName . ,server-name)
       (serverRunning . ,server-running))))
 
+;;;###autoload
 (defun codex-ide-bridge-ensure-server ()
   "Ensure the target Emacs server for the bridge is running."
   (when (codex-ide-bridge-enabled-p)
@@ -174,6 +191,7 @@ Errors from `server-running-p' are treated as nil."
       (unless (codex-ide-bridge--ensure-server-running-p server-name)
         (server-start nil codex-ide-suppress-server-start-prompts)))))
 
+;;;###autoload
 (defun codex-ide-bridge-mcp-config-args ()
   "Return `codex app-server' CLI args that register the Emacs MCP bridge."
   (when (codex-ide-bridge-enabled-p)
@@ -290,6 +308,7 @@ Errors from `server-running-p' are treated as nil."
       ("eval" (codex-ide-bridge--eval params))
       (_ (error "Unsupported bridge action: %s" action)))))
 
+;;;###autoload
 (defun codex-ide-bridge-dispatch-json (payload)
   "Dispatch PAYLOAD, a JSON bridge request, and return a JSON response string."
   (condition-case err

@@ -216,7 +216,7 @@
                            codex-ide-enable-emacs-tool-bridge)
   (message "Codex IDE configuration saved"))
 
-;;;###autoload (autoload 'codex-ide-menu "codex-ide-transient" "Codex IDE main menu." t)
+;;;###autoload
 (transient-define-prefix codex-ide-menu ()
   "Open the main Codex IDE menu."
   [:description codex-ide--session-status]
@@ -240,6 +240,7 @@
     ("C" "Configuration" codex-ide-config-menu)
     ("d" "Debug" codex-ide-debug-menu)]])
 
+;;;###autoload
 (transient-define-prefix codex-ide-config-menu ()
   "Open the Codex IDE configuration menu."
   ["Codex IDE Configuration"
@@ -270,6 +271,7 @@
   ["Save"
    ("V" "Save configuration" codex-ide--save-config)])
 
+;;;###autoload
 (transient-define-prefix codex-ide-debug-menu ()
   "Open a small debug/status menu for Codex IDE."
   ["Codex IDE Debug"

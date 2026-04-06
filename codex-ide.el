@@ -27,6 +27,7 @@
 (require 'subr-x)
 (require 'codex-ide-transient)
 
+;;;###autoload
 (defgroup codex-ide nil
   "Codex app-server integration for Emacs."
   :group 'tools
@@ -107,37 +108,64 @@
   "Face used for the Codex session header line."
   :group 'codex-ide)
 
+(defface codex-ide-status-running-face
+  '((t :inherit mode-line-emphasis :weight bold))
+  "Face used for a running Codex session in the mode line."
+  :group 'codex-ide)
+
+(defface codex-ide-status-idle-face
+  '((t :inherit success :weight semibold))
+  "Face used for an idle Codex session in the mode line."
+  :group 'codex-ide)
+
+(defface codex-ide-status-busy-face
+  '((t :inherit warning :weight bold))
+  "Face used for transitional Codex session states in the mode line."
+  :group 'codex-ide)
+
+(defface codex-ide-status-error-face
+  '((t :inherit error :weight bold))
+  "Face used for failed or disconnected Codex session states in the mode line."
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-cli-path "codex"
   "Path to the Codex CLI executable."
   :type 'string
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-buffer-name-function #'codex-ide--default-buffer-name
   "Function used to derive the Codex session buffer name."
   :type 'function
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-cli-extra-flags ""
   "Additional flags appended to the `codex app-server` command."
   :type 'string
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-model nil
   "Optional model name for new or resumed threads."
   :type '(choice (const :tag "Default" nil)
                  (string :tag "Model"))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-buffer-name-prefix "codex"
   "Prefix used when creating Codex session buffer names."
   :type 'string
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-use-side-window nil
   "Whether to display Codex buffers in a side window."
   :type 'boolean
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-window-side 'right
   "Side of the frame where Codex should be displayed."
   :type '(choice (const :tag "Left" left)
@@ -146,21 +174,25 @@
                  (const :tag "Bottom" bottom))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-window-width 90
   "Width of the Codex side window when using left or right placement."
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-window-height 20
   "Height of the Codex side window when using top or bottom placement."
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-focus-on-open t
   "Whether to focus the Codex window after showing it."
   :type 'boolean
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-approval-policy "on-request"
   "Approval policy for new or resumed Codex threads."
   :type '(choice (const "untrusted")
@@ -169,6 +201,7 @@
                  (const "never"))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-sandbox-mode "workspace-write"
   "Sandbox mode for new or resumed Codex threads."
   :type '(choice (const "read-only")
@@ -176,6 +209,7 @@
                  (const "danger-full-access"))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-personality "pragmatic"
   "Personality for new or resumed Codex threads."
   :type '(choice (const "none")
@@ -183,11 +217,13 @@
                  (const "pragmatic"))
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-request-timeout 10
   "Seconds to wait for synchronous app-server responses."
   :type 'number
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-enable-log nil
   "Whether Codex IDE logging is enabled.
 
@@ -197,6 +233,7 @@ events plus stderr output from the Codex app-server process."
   :set #'codex-ide--set-log-enabled
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-log-max-lines 10000
   "Maximum number of lines to keep in each Codex log buffer.
 
@@ -205,6 +242,7 @@ top of the buffer."
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
 (defcustom codex-ide-include-active-buffer-context 'when-changed
   "How `codex-ide' should include Emacs active-buffer context in prompts.
 When set to `when-changed', include the active file context only when it has
@@ -378,11 +416,14 @@ Add this variable to `savehist-additional-variables' to persist it.")
       (unless (eq inside codex-ide-session-prompt-minor-mode)
         (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))
 
+;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
   (setq-local truncate-lines nil)
+  (setq-local mode-line-process '((:eval (codex-ide--mode-line-status))))
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
 
+;;;###autoload
 (define-derived-mode codex-ide-log-mode special-mode "Codex-IDE-Log"
   "Major mode for Codex IDE log buffers."
   (setq-local truncate-lines t))
@@ -402,6 +443,51 @@ Add this variable to `savehist-additional-variables' to persist it.")
   (format "*%s[%s]-log*"
           codex-ide-buffer-name-prefix
           (codex-ide--project-name directory)))
+
+(defun codex-ide--status-label (status)
+  "Return a display label for STATUS."
+  (pcase (and (stringp status) (downcase status))
+    ("running" "Running")
+    ("idle" "Idle")
+    ("starting" "Starting")
+    ("interrupting" "Interrupting")
+    ("submitted" "Submitted")
+    ("disconnected" "Disconnected")
+    ((pred stringp) (capitalize status))
+    (_ "Disconnected")))
+
+(defun codex-ide--status-face (status)
+  "Return the face to use for STATUS."
+  (let ((status (and (stringp status) (downcase status))))
+    (cond
+     ((equal status "idle") 'codex-ide-status-idle-face)
+     ((member status '("running" "submitted")) 'codex-ide-status-running-face)
+     ((member status '("starting" "interrupting")) 'codex-ide-status-busy-face)
+     ((or (member status '("failed" "error" "disconnected" "finished" "killed"))
+          (and status
+               (string-match-p (rx (or "exit" "exited" "abnormally")) status)))
+      'codex-ide-status-error-face)
+     (t 'codex-ide-status-busy-face))))
+
+(defun codex-ide--mode-line-status (&optional session)
+  "Return the current modeline status segment for SESSION."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (when (codex-ide-session-p session)
+    (let* ((status (or (codex-ide-session-status session) "disconnected"))
+           (label (codex-ide--status-label status))
+           (face (codex-ide--status-face status)))
+      (concat
+       " "
+       (propertize "Codex" 'face 'mode-line-emphasis)
+       ":"
+       (propertize label 'face face)))))
+
+(defun codex-ide--update-mode-line (&optional session)
+  "Refresh the mode line indicator for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when-let ((buffer (and session (codex-ide-session-buffer session))))
+    (with-current-buffer buffer
+      (force-mode-line-update t))))
 
 (defun codex-ide--initialize-log-buffer (buffer directory)
   "Prepare BUFFER for logging for DIRECTORY."
@@ -1119,7 +1205,8 @@ FORMAT-STRING and ARGS are passed to `format'."
                        token-summary
                        rate-limit-summary))
                 "  ")
-               'face 'codex-ide-header-line-face))))))
+               'face 'codex-ide-header-line-face)))
+      (codex-ide--update-mode-line session))))
 
 (defun codex-ide--make-buffer-context (&optional buffer)
   "Build Codex context for BUFFER or the current buffer.
@@ -1248,12 +1335,15 @@ Optionally seed it with INITIAL-TEXT."
                 (copy-marker (point)))
           (setq prompt-start (point))
           (insert (propertize "> " 'face 'codex-ide-user-prompt-face))
+          (codex-ide--freeze-region prompt-start (point))
           (setf (codex-ide-session-input-start-marker session)
                 (copy-marker (point)))
           (codex-ide--reset-prompt-history-navigation session)
           (when initial-text
             (insert initial-text))
-          (codex-ide--make-region-writable prompt-start (point))
+          (codex-ide--make-region-writable
+           (marker-position (codex-ide-session-input-start-marker session))
+           (point))
           (let ((overlay (make-overlay
                           (marker-position
                            (codex-ide-session-input-prompt-start-marker session))

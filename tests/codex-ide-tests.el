@@ -9,6 +9,7 @@
 
 (require 'cl-lib)
 (require 'ert)
+(require 'package)
 (require 'project)
 (require 'seq)
 
@@ -28,6 +29,12 @@
   live
   plist
   sent-strings)
+
+(defconst codex-ide-test--root-directory
+  (file-name-directory
+   (directory-file-name
+    (file-name-directory (or load-file-name buffer-file-name))))
+  "Repository root used by the codex-ide test suite.")
 
 (defun codex-ide-test--process-put (process key value)
   "Store VALUE at KEY on fake PROCESS."
@@ -74,6 +81,12 @@
                 (codex-ide-test-process-create
                  :live t
                  :plist (list :make-process-spec plist)
+                 :sent-strings nil)))
+             ((symbol-function 'make-pipe-process)
+              (lambda (&rest plist)
+                (codex-ide-test-process-create
+                 :live t
+                 :plist (list :make-pipe-process-spec plist)
                  :sent-strings nil)))
              ((symbol-function 'process-live-p)
               (lambda (process)
@@ -131,25 +144,26 @@
 (ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session (codex-ide--create-process-session)))
-          (should (string= (codex-ide-session-directory session)
-                           (directory-file-name (file-truename project-dir))))
-          (should (codex-ide-test-process-p (codex-ide-session-process session)))
-          (should (eq session
-                      (gethash (directory-file-name (file-truename project-dir))
-                               codex-ide--sessions)))
-          (with-current-buffer (codex-ide-session-buffer session)
-            (should (derived-mode-p 'codex-ide-session-mode))
-            (should (string-match-p "Codex session for" (buffer-string))))
-          (with-current-buffer (codex-ide-session-log-buffer session)
-            (should (derived-mode-p 'codex-ide-log-mode))
-            (should (string-match-p "Codex log for" (buffer-string))))
-          (should
-           (equal (plist-get (codex-ide-test-process-plist
-                              (codex-ide-session-process session))
-                             'codex-session)
-                  session)))))))
+      (let ((codex-ide-enable-log t))
+        (codex-ide-test-with-fake-processes
+          (let ((session (codex-ide--create-process-session)))
+            (should (string= (codex-ide-session-directory session)
+                             (directory-file-name (file-truename project-dir))))
+            (should (codex-ide-test-process-p (codex-ide-session-process session)))
+            (should (eq session
+                        (gethash (directory-file-name (file-truename project-dir))
+                                 codex-ide--sessions)))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (should (derived-mode-p 'codex-ide-session-mode))
+              (should (string-match-p "Codex session for" (buffer-string))))
+            (with-current-buffer (codex-ide-session-log-buffer session)
+              (should (derived-mode-p 'codex-ide-log-mode))
+              (should (string-match-p "Codex log for" (buffer-string))))
+            (should
+             (equal (plist-get (codex-ide-test-process-plist
+                                (codex-ide-session-process session))
+                               'codex-session)
+                    session))))))))
 
 (ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -180,6 +194,21 @@
               (goto-char (point-max))
               (forward-line 0)
               (should (looking-at-p "> ")))))))))
+
+(ert-deftest codex-ide-input-prompt-prefix-is-read-only ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "hello")
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
+            (should-error (delete-backward-char 1) :type 'text-read-only)
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (looking-at-p "> hello"))
+            (should (string= (codex-ide--current-input session) "hello"))))))))
 
 (ert-deftest codex-ide-compose-turn-input-includes-context-only-on-first-send ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -288,6 +317,33 @@
                   "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
                   "-c" "mcp_servers.editor.startup_timeout_sec=15"
                   "-c" "mcp_servers.editor.tool_timeout_sec=45")))))))
+
+(ert-deftest codex-ide-package-generate-autoloads-captures-public-entry-points ()
+  (let* ((temp-dir (make-temp-file "codex-ide-autoloads-" t))
+         (autoload-file nil))
+    (unwind-protect
+        (progn
+          (dolist (file '("codex-ide.el"
+                          "codex-ide-bridge.el"
+                          "codex-ide-transient.el"))
+            (copy-file (expand-file-name file codex-ide-test--root-directory)
+                       (expand-file-name file temp-dir)
+                       t))
+          (setq autoload-file
+                (expand-file-name
+                 (package-generate-autoloads "codex-ide" temp-dir)
+                 temp-dir))
+          (should (file-exists-p autoload-file))
+          (with-temp-buffer
+            (insert-file-contents autoload-file)
+            (let ((contents (buffer-string)))
+              (should (string-match-p "(get 'codex-ide 'custom-loads)" contents))
+              (should (string-match-p "(custom-autoload 'codex-ide-cli-path " contents))
+              (should (string-match-p "(autoload 'codex-ide " contents))
+              (should (string-match-p "(autoload 'codex-ide-menu " contents))
+              (should (string-match-p "(autoload 'codex-ide-bridge-enable "
+                                      contents)))))
+      (delete-directory temp-dir t))))
 
 (provide 'codex-ide-tests)
 
