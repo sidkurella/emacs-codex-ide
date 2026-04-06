@@ -144,26 +144,30 @@
 (ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-enable-log t))
-        (codex-ide-test-with-fake-processes
-          (let ((session (codex-ide--create-process-session)))
-            (should (string= (codex-ide-session-directory session)
-                             (directory-file-name (file-truename project-dir))))
-            (should (codex-ide-test-process-p (codex-ide-session-process session)))
-            (should (eq session
-                        (gethash (directory-file-name (file-truename project-dir))
-                                 codex-ide--sessions)))
-            (with-current-buffer (codex-ide-session-buffer session)
-              (should (derived-mode-p 'codex-ide-session-mode))
-              (should (string-match-p "Codex session for" (buffer-string))))
-            (with-current-buffer (codex-ide-session-log-buffer session)
-              (should (derived-mode-p 'codex-ide-log-mode))
-              (should (string-match-p "Codex log for" (buffer-string))))
-            (should
-             (equal (plist-get (codex-ide-test-process-plist
-                                (codex-ide-session-process session))
-                               'codex-session)
-                    session))))))))
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (should (string= (codex-ide-session-directory session)
+                           (directory-file-name (file-truename project-dir))))
+          (should (codex-ide-test-process-p (codex-ide-session-process session)))
+          (should (eq session
+                      (gethash (directory-file-name (file-truename project-dir))
+                               codex-ide--sessions)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (derived-mode-p 'codex-ide-session-mode))
+            (should (string-match-p "Codex session for" (buffer-string))))
+          (with-current-buffer (codex-ide-session-log-buffer session)
+            (should (derived-mode-p 'codex-ide-log-mode))
+            (should (equal (buffer-name)
+                           (format "*%s-log[%s]*"
+                                   codex-ide-buffer-name-prefix
+                                   (file-name-nondirectory
+                                    (directory-file-name project-dir)))))
+            (should (string-match-p "Codex log for" (buffer-string))))
+          (should
+           (equal (plist-get (codex-ide-test-process-plist
+                              (codex-ide-session-process session))
+                             'codex-session)
+                  session)))))))
 
 (ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
   (let ((project-dir (codex-ide-test--make-temp-project))

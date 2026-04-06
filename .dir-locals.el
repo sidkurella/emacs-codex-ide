@@ -1,1 +1,1 @@
-((nil . ((codex-ide-enable-log . t))))
+((nil . ((codex-ide-log-max-lines . 1000000))))
