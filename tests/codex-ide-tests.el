@@ -1,0 +1,294 @@
+;;; codex-ide-tests.el --- Tests for codex-ide -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; These tests exercise codex-ide without depending on a real `codex`
+;; executable. Process and RPC interactions are stubbed with in-memory fakes.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'ert)
+(require 'project)
+(require 'seq)
+
+(setq load-prefer-newer t)
+(setq load-suffixes '(".el"))
+
+(add-to-list 'load-path
+             (file-name-directory
+              (directory-file-name
+               (file-name-directory (or load-file-name buffer-file-name)))))
+
+(require 'codex-ide)
+(require 'codex-ide-bridge)
+
+(cl-defstruct (codex-ide-test-process
+               (:constructor codex-ide-test-process-create))
+  live
+  plist
+  sent-strings)
+
+(defun codex-ide-test--process-put (process key value)
+  "Store VALUE at KEY on fake PROCESS."
+  (setf (codex-ide-test-process-plist process)
+        (plist-put (codex-ide-test-process-plist process) key value))
+  value)
+
+(defun codex-ide-test--process-get (process key)
+  "Return KEY from fake PROCESS."
+  (plist-get (codex-ide-test-process-plist process) key))
+
+(defun codex-ide-test--cleanup-buffers (buffers-before)
+  "Kill buffers created after BUFFERS-BEFORE."
+  (dolist (buffer (buffer-list))
+    (unless (memq buffer buffers-before)
+      (when (buffer-live-p buffer)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer buffer))))))
+
+(defmacro codex-ide-test-with-fixture (directory &rest body)
+  "Run BODY in an isolated codex-ide fixture rooted at DIRECTORY."
+  (declare (indent 1) (debug t))
+  `(let* ((default-directory (file-name-as-directory ,directory))
+          (buffers-before (buffer-list))
+          (codex-ide--cli-available nil)
+          (codex-ide--sessions (make-hash-table :test 'equal))
+          (codex-ide--last-accessed-buffer nil)
+          (codex-ide--active-buffer-contexts (make-hash-table :test 'equal))
+          (codex-ide--last-sent-buffer-contexts (make-hash-table :test 'equal))
+          (codex-ide-persisted-project-state (make-hash-table :test 'equal))
+          (codex-ide--session-metadata (make-hash-table :test 'eq))
+          (codex-ide-enable-emacs-tool-bridge nil))
+     (unwind-protect
+         (progn ,@body)
+       (when codex-ide-track-active-buffer-mode
+         (codex-ide-track-active-buffer-mode -1))
+       (codex-ide-test--cleanup-buffers buffers-before))))
+
+(defmacro codex-ide-test-with-fake-processes (&rest body)
+  "Run BODY with process primitives redirected to fake process objects."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'make-process)
+              (lambda (&rest plist)
+                (codex-ide-test-process-create
+                 :live t
+                 :plist (list :make-process-spec plist)
+                 :sent-strings nil)))
+             ((symbol-function 'process-live-p)
+              (lambda (process)
+                (and (codex-ide-test-process-p process)
+                     (codex-ide-test-process-live process))))
+             ((symbol-function 'delete-process)
+              (lambda (process)
+                (setf (codex-ide-test-process-live process) nil)
+                nil))
+             ((symbol-function 'process-put)
+              #'codex-ide-test--process-put)
+             ((symbol-function 'process-get)
+              #'codex-ide-test--process-get)
+             ((symbol-function 'process-send-string)
+              (lambda (process string)
+                (setf (codex-ide-test-process-sent-strings process)
+                      (append (codex-ide-test-process-sent-strings process)
+                              (list string)))))
+             ((symbol-function 'set-process-query-on-exit-flag)
+              (lambda (&rest _) nil))
+             ((symbol-function 'accept-process-output)
+              (lambda (&rest _) nil)))
+     ,@body))
+
+(defun codex-ide-test--make-temp-project ()
+  "Create and return a temporary project directory."
+  (make-temp-file "codex-ide-tests-" t))
+
+(defun codex-ide-test--make-project-file (directory name contents)
+  "Create file NAME with CONTENTS under DIRECTORY and return its path."
+  (let ((path (expand-file-name name directory)))
+    (make-directory (file-name-directory path) t)
+    (with-temp-file path
+      (insert contents))
+    path))
+
+(ert-deftest codex-ide-app-server-command-includes-bridge-and-extra-flags ()
+  (let ((codex-ide-cli-path "/tmp/codex")
+        (codex-ide-cli-extra-flags "--model test-model --debug")
+        (bridge-args '("-c" "mcp_servers.emacs.command=\"python3\"")))
+    (cl-letf (((symbol-function 'codex-ide-bridge-mcp-config-args)
+               (lambda () bridge-args)))
+      (should
+       (equal (codex-ide--app-server-command)
+              '("/tmp/codex"
+                "app-server"
+                "--listen"
+                "stdio://"
+                "-c"
+                "mcp_servers.emacs.command=\"python3\""
+                "--model"
+                "test-model"
+                "--debug"))))))
+
+(ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (should (string= (codex-ide-session-directory session)
+                           (directory-file-name (file-truename project-dir))))
+          (should (codex-ide-test-process-p (codex-ide-session-process session)))
+          (should (eq session
+                      (gethash (directory-file-name (file-truename project-dir))
+                               codex-ide--sessions)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (derived-mode-p 'codex-ide-session-mode))
+            (should (string-match-p "Codex session for" (buffer-string))))
+          (with-current-buffer (codex-ide-session-log-buffer session)
+            (should (derived-mode-p 'codex-ide-log-mode))
+            (should (string-match-p "Codex log for" (buffer-string))))
+          (should
+           (equal (plist-get (codex-ide-test-process-plist
+                              (codex-ide-session-process session))
+                             'codex-session)
+                  session)))))))
+
+(ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '()))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--display-buffer-in-side-window)
+                   (lambda (_buffer) (selected-window)))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method params)
+                     (push (cons method params) requests)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/start" '((thread . ((id . "thread-test-1")))))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (let ((session (codex-ide--start-session 'new)))
+            (should (string= (codex-ide-session-thread-id session) "thread-test-1"))
+            (should (equal (mapcar #'car (nreverse requests))
+                           '("initialize" "thread/start")))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (should (derived-mode-p 'codex-ide-session-mode))
+              (goto-char (point-max))
+              (forward-line 0)
+              (should (looking-at-p "> ")))))))))
+
+(ert-deftest codex-ide-compose-turn-input-includes-context-only-on-first-send ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "src/example.el" "(message \"hello\")\n")))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-include-active-buffer-context 'when-changed))
+        (with-current-buffer (find-file-noselect file-path)
+          (goto-char (point-min))
+          (forward-line 0)
+          (move-to-column 3)
+          (let ((context (codex-ide--make-buffer-context)))
+            (puthash (alist-get 'project-dir context)
+                     context
+                     codex-ide--active-buffer-contexts)
+              (let* ((first-item (aref (codex-ide--compose-turn-input "Explain this") 0))
+                     (second-item (aref (codex-ide--compose-turn-input "Explain again") 0))
+                     (first-text (alist-get 'text first-item))
+                     (second-text (alist-get 'text second-item)))
+                (should (string-match-p "\\[Emacs context\\]" first-text))
+              (should (string-match-p "Last file focused in Emacs: .*src/example\\.el" first-text))
+                (should-not (string-match-p "\\[Emacs context\\]" second-text))
+                (should (string= second-text "Explain again")))))))))
+
+(ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (response-result nil)
+        (response-error :unset))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (process (codex-ide-session-process session)))
+          (puthash 7
+                   (lambda (result error)
+                     (setq response-result result
+                           response-error error))
+                   (codex-ide-session-pending-requests session))
+          (codex-ide--process-filter
+           process
+           "{\"id\":7,\"result\":{\"ok\":true}}\n{\"method\":\"thread/status/changed\",\"params\":{\"thread\":{\"status\":\"running\"}}}")
+          (should (equal (codex-ide-session-partial-line session)
+                         "{\"method\":\"thread/status/changed\",\"params\":{\"thread\":{\"status\":\"running\"}}}"))
+          (codex-ide--process-filter process "\n")
+          (should (equal response-result '((ok . t))))
+          (should (null response-error))
+          (should (string= (codex-ide-session-status session) "running")))))))
+
+(ert-deftest codex-ide-send-active-buffer-context-submits-formatted-context ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "lib/example.el" "(+ 1 2)\n"))
+         (submitted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-test-2")
+          (with-current-buffer (find-file-noselect file-path)
+            (setq-local default-directory (file-name-as-directory project-dir))
+            (goto-char (point-min))
+            (forward-char 2)
+            (let ((context (codex-ide--make-buffer-context)))
+              (puthash (alist-get 'project-dir context)
+                       context
+                       codex-ide--active-buffer-contexts)
+              (cl-letf (((symbol-function 'codex-ide--submit-prompt)
+                         (lambda (prompt)
+                           (setq submitted prompt))))
+                (codex-ide-send-active-buffer-context)
+                (should (string-match-p "\\[Emacs context\\]" submitted))
+                (should (string-match-p "Last file focused in Emacs: .*lib/example\\.el" submitted))
+                (should (string-match-p "Buffer: example.el" submitted))))))))))
+
+(ert-deftest codex-ide-clear-markdown-properties-preserves-non-markdown-faces ()
+  (with-temp-buffer
+    (insert "prefix `code` suffix\n* Ran command\n")
+    (let* ((markdown-start 1)
+           (markdown-end (1+ (line-end-position)))
+           (summary-start (save-excursion
+                            (goto-char (point-min))
+                            (forward-line 1)
+                            (point)))
+           (summary-end (line-end-position 2)))
+      (add-text-properties summary-start summary-end
+                           '(face codex-ide-item-summary-face))
+      (codex-ide--render-markdown-region markdown-start markdown-end)
+      (should (eq (get-text-property summary-start 'face)
+                  'codex-ide-item-summary-face))
+      (codex-ide--render-markdown-region markdown-start (point-max))
+      (should (eq (get-text-property summary-start 'face)
+                  'codex-ide-item-summary-face)))))
+
+(ert-deftest codex-ide-bridge-mcp-config-args-reflect-enabled-settings ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-enable-emacs-tool-bridge t)
+            (codex-ide-emacs-tool-bridge-name "editor")
+            (codex-ide-emacs-bridge-python-command "/usr/bin/python3")
+            (codex-ide-emacs-bridge-emacsclient-command "/usr/bin/emacsclient")
+            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp.py")
+            (codex-ide-emacs-bridge-server-name "testsrv")
+            (codex-ide-emacs-bridge-startup-timeout 15)
+            (codex-ide-emacs-bridge-tool-timeout 45))
+        (should
+         (equal (codex-ide-bridge-mcp-config-args)
+                '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
+                  "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
+                  "-c" "mcp_servers.editor.startup_timeout_sec=15"
+                  "-c" "mcp_servers.editor.tool_timeout_sec=45")))))))
+
+(provide 'codex-ide-tests)
+
+;;; codex-ide-tests.el ends here

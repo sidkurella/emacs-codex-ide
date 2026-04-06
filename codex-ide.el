@@ -705,22 +705,30 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
 
 (defun codex-ide--clear-markdown-properties (start end)
   "Clear Codex markdown rendering properties between START and END."
-  (remove-text-properties
-   start end
-   '(font-lock-face nil
-     face nil
-     mouse-face nil
-     help-echo nil
-     keymap nil
-     category nil
-     button nil
-     action nil
-     follow-link nil
-     display nil
-     codex-ide-path nil
-     codex-ide-line nil
-     codex-ide-column nil
-     codex-ide-markdown nil)))
+  (let ((pos start))
+    ;; Only remove properties from regions previously marked as markdown.
+    ;; Clearing `face' across the whole agent-message span can wipe faces from
+    ;; later non-markdown transcript entries like "* Ran ..." summaries.
+    (while (< pos end)
+      (let ((next (next-single-property-change pos 'codex-ide-markdown nil end)))
+        (when (get-text-property pos 'codex-ide-markdown)
+          (remove-text-properties
+           pos next
+           '(font-lock-face nil
+             face nil
+             mouse-face nil
+             help-echo nil
+             keymap nil
+             category nil
+             button nil
+             action nil
+             follow-link nil
+             display nil
+             codex-ide-path nil
+             codex-ide-line nil
+             codex-ide-column nil
+             codex-ide-markdown nil)))
+        (setq pos next)))))
 
 (defun codex-ide--normalize-markdown-link-label (label)
   "Return LABEL with markdown code delimiters stripped when present."
