@@ -239,8 +239,14 @@ When nil, never include active-buffer context automatically."
 (defvar codex-ide--active-buffer-contexts (make-hash-table :test 'equal)
   "Hash table mapping working directories to the latest Emacs buffer context.")
 
+(defvar codex-ide--active-buffer-objects (make-hash-table :test 'equal)
+  "Hash table mapping working directories to the latest live Emacs file buffer.")
+
 (defvar codex-ide--last-sent-buffer-contexts (make-hash-table :test 'equal)
   "Hash table mapping working directories to the last context sent to Codex.")
+
+(defvar codex-ide--prompt-origin-buffer nil
+  "Buffer to treat as the authoritative prompt context for one submission.")
 
 (defvar codex-ide-persisted-project-state (make-hash-table :test 'equal)
   "Hash table mapping project directories to persisted Codex IDE state.
@@ -453,7 +459,8 @@ Add this variable to `savehist-additional-variables' to persist it.")
        " "
        (propertize "Codex" 'face 'mode-line-emphasis)
        ":"
-       (propertize label 'face face)))))
+       (propertize label 'face face)
+       " "))))
 
 (defun codex-ide--update-mode-line (&optional session)
   "Refresh the mode line indicator for SESSION."
@@ -648,6 +655,7 @@ current buffer's project directory."
       (remhash session codex-ide--session-metadata))
     (remhash directory codex-ide--sessions)
     (remhash directory codex-ide--active-buffer-contexts)
+    (remhash directory codex-ide--active-buffer-objects)
     (remhash directory codex-ide--last-sent-buffer-contexts)
     (codex-ide--maybe-disable-active-buffer-tracking)))
 
@@ -1201,6 +1209,31 @@ Returns nil for buffers that should not be tracked."
                     (column . ,column)
                     (project-dir . ,working-dir)))))))))))
 
+(defun codex-ide--make-explicit-buffer-context (buffer working-dir)
+  "Build Codex context for BUFFER using WORKING-DIR, even for non-file buffers.
+This is used for explicit prompt submissions where the invoking buffer should
+be treated as authoritative context for the next turn."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let* ((working-dir (codex-ide--normalize-directory working-dir))
+             (working-dir-path (file-name-as-directory working-dir))
+             (file-path (buffer-file-name))
+             (expanded-file (and file-path (expand-file-name file-path)))
+             (display-file
+              (cond
+               ((not expanded-file)
+                (format "[buffer] %s" (buffer-name)))
+               ((file-in-directory-p expanded-file working-dir-path)
+                (file-relative-name expanded-file working-dir-path))
+               (t
+                (abbreviate-file-name expanded-file)))))
+        `((file . ,expanded-file)
+          (display-file . ,display-file)
+          (buffer-name . ,(buffer-name))
+          (line . ,(line-number-at-pos))
+          (column . ,(current-column))
+          (project-dir . ,working-dir))))))
+
 (defun codex-ide--safe-current-buffer ()
   "Return the current buffer, or nil during buffer teardown.
 Global hooks can run while the selected buffer is being killed, in which case
@@ -1220,6 +1253,7 @@ This cache is maintained even when no Codex session is currently active."
               (context (codex-ide--make-buffer-context buffer))
               (working-dir (alist-get 'project-dir context)))
     (puthash working-dir context codex-ide--active-buffer-contexts)
+    (puthash working-dir buffer codex-ide--active-buffer-objects)
     (when-let ((session (gethash working-dir codex-ide--sessions)))
       (when (process-live-p (codex-ide-session-process session))
         (codex-ide--update-header-line session)))))
@@ -1242,6 +1276,7 @@ When BUFFER is nil, use the current buffer."
       (when-let ((context (codex-ide--make-buffer-context target)))
         (let ((working-dir (alist-get 'project-dir context)))
           (puthash working-dir context codex-ide--active-buffer-contexts)
+          (puthash working-dir target codex-ide--active-buffer-objects)
           (when-let ((session (gethash working-dir codex-ide--sessions)))
             (when (process-live-p (codex-ide-session-process session))
               (codex-ide--update-header-line session))))))))
@@ -1260,6 +1295,31 @@ When BUFFER is nil, use the current buffer."
              context))))
      (buffer-list))))
 
+(defun codex-ide--infer-recent-file-buffer ()
+  "Infer the most recently used real file buffer for the current project."
+  (let ((working-dir (codex-ide--get-working-directory)))
+    (seq-some
+     (lambda (buffer)
+       (unless (or (minibufferp buffer)
+                   (codex-ide--session-buffer-p buffer))
+         (let ((context (codex-ide--make-buffer-context buffer)))
+           (when (and context
+                      (string= (alist-get 'project-dir context)
+                               working-dir))
+             buffer))))
+     (buffer-list))))
+
+(defun codex-ide--get-active-buffer-object ()
+  "Return the best available active file buffer for the current project."
+  (let* ((working-dir (codex-ide--get-working-directory))
+         (buffer (gethash working-dir codex-ide--active-buffer-objects)))
+    (cond
+     ((buffer-live-p buffer) buffer)
+     ((when-let ((inferred (codex-ide--infer-recent-file-buffer)))
+        (puthash working-dir inferred codex-ide--active-buffer-objects)
+        inferred))
+     (t nil))))
+
 (defun codex-ide--get-active-buffer-context ()
   "Return the best available active file context for the current project."
   (let ((working-dir (codex-ide--get-working-directory)))
@@ -1268,19 +1328,70 @@ When BUFFER is nil, use the current buffer."
           (puthash working-dir context codex-ide--active-buffer-contexts)
           context))))
 
+(defun codex-ide--buffer-selection-context (&optional buffer)
+  "Return BUFFER's active region bounds as an alist, or nil.
+The return value contains 1-based line numbers and 0-based columns."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (use-region-p)
+        (let ((start (region-beginning))
+              (end (region-end)))
+          `((start-line . ,(line-number-at-pos start))
+            (start-column . ,(save-excursion
+                               (goto-char start)
+                               (current-column)))
+            (end-line . ,(line-number-at-pos end))
+            (end-column . ,(save-excursion
+                             (goto-char end)
+                             (current-column)))))))))
+
+(defun codex-ide--context-with-selected-region (context &optional buffer)
+  "Return CONTEXT augmented with BUFFER's active region, when present."
+  (if-let ((selection (codex-ide--buffer-selection-context buffer)))
+      (append context `((selection . ,selection)))
+    context))
+
 (defun codex-ide--format-buffer-context (context)
   "Format CONTEXT for insertion into a Codex prompt."
-  (format (concat "[Emacs context]\n"
-                  "You are Codex running inside Emacs.\n"
-                  "Prefer Emacs-aware behavior and treat the active file/buffer context below as authoritative unless I say otherwise.\n"
-                  "Last file focused in Emacs: %s\n"
-                  "Buffer: %s\n"
-                  "Cursor: line %s, column %s\n"
-                  "Treat references like \"this file\" or \"the current file\" as referring to this file unless I say otherwise.\n")
-          (alist-get 'display-file context)
-          (alist-get 'buffer-name context)
-          (alist-get 'line context)
-          (alist-get 'column context)))
+  (let ((selection (alist-get 'selection context)))
+    (format (concat "[Emacs context]\n"
+                    "You are Codex running inside Emacs.\n"
+                    "Prefer Emacs-aware behavior and treat the active file/buffer context below as authoritative unless I say otherwise.\n"
+                    "Last file/buffer focused in Emacs: %s\n"
+                    "Buffer: %s\n"
+                    "Cursor: line %s, column %s\n"
+                    "%s"
+                    "Treat references like \"this file\", \"this buffer\", or \"the current file\" as referring to this buffer unless I say otherwise.\n")
+            (alist-get 'display-file context)
+            (alist-get 'buffer-name context)
+            (alist-get 'line context)
+            (alist-get 'column context)
+            (if selection
+                (format "Selected region: line %s, column %s to line %s, column %s\n"
+                        (alist-get 'start-line selection)
+                        (alist-get 'start-column selection)
+                        (alist-get 'end-line selection)
+                        (alist-get 'end-column selection))
+              ""))))
+
+(defun codex-ide--format-buffer-context-summary (context)
+  "Return a compact transcript summary line for CONTEXT."
+  (let ((selection (alist-get 'selection context)))
+    (string-join
+     (delq nil
+           (list
+            (format "Context: file=%S" (alist-get 'display-file context))
+            (format "buffer=%S" (alist-get 'buffer-name context))
+            (format "line=%s" (alist-get 'line context))
+            (format "column=%s" (alist-get 'column context))
+            (when selection
+              (format "selection=%S"
+                      (format "%s:%s-%s:%s"
+                              (alist-get 'start-line selection)
+                              (alist-get 'start-column selection)
+                              (alist-get 'end-line selection)
+                              (alist-get 'end-column selection))))))
+     " ")))
 
 (defun codex-ide--insert-input-prompt (&optional session initial-text)
   "Insert a writable `>` prompt for SESSION.
@@ -1437,8 +1548,9 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
                         "No later prompt line")))
         (goto-char (match-beginning 0))))))
 
-(defun codex-ide--begin-turn-display (&optional session)
-  "Freeze the current prompt and show immediate pending output for SESSION."
+(defun codex-ide--begin-turn-display (&optional session context-summary)
+  "Freeze the current prompt and show immediate pending output for SESSION.
+When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
@@ -1446,10 +1558,19 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (let ((inhibit-read-only t)
+              context-start
               spacing-start)
           (when-let ((start (codex-ide-session-input-prompt-start-marker session)))
-          (codex-ide--style-user-prompt-region start (point-max))
-          (codex-ide--freeze-region start (point-max)))
+            (codex-ide--style-user-prompt-region start (point-max))
+            (codex-ide--freeze-region start (point-max))
+            (when context-summary
+              (setq context-start (point-max))
+              (goto-char context-start)
+              (insert "\n")
+              (insert (propertize context-summary
+                                  'face
+                                  'codex-ide-item-detail-face))
+              (codex-ide--freeze-region context-start (point))))
           (codex-ide--delete-input-overlay session)
           (codex-ide--sync-prompt-minor-mode session)
           (goto-char (point-max))
@@ -1844,19 +1965,40 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
     (codex-ide--append-to-buffer buffer "\n\n")
     (codex-ide--insert-input-prompt session)))
 
+(defun codex-ide--context-payload-for-prompt ()
+  "Return context payload metadata for the current prompt, or nil.
+The result is an alist with `formatted' and `summary' entries."
+  (let ((working-dir (codex-ide--get-working-directory)))
+    (when-let* ((context-buffer (or codex-ide--prompt-origin-buffer
+                                    (codex-ide--get-active-buffer-object)))
+                (context (or (and codex-ide--prompt-origin-buffer
+                                  (codex-ide--make-explicit-buffer-context
+                                   codex-ide--prompt-origin-buffer
+                                   working-dir))
+                             (codex-ide--get-active-buffer-context))))
+      (let* ((context-with-selection
+              (codex-ide--context-with-selected-region
+               context
+               context-buffer))
+             (formatted-context
+              (codex-ide--format-buffer-context context-with-selection))
+             (context-summary
+              (codex-ide--format-buffer-context-summary context-with-selection)))
+        (pcase codex-ide-include-active-buffer-context
+          ('always
+           (puthash working-dir context codex-ide--last-sent-buffer-contexts)
+           `((formatted . ,formatted-context)
+             (summary . ,context-summary)))
+          ('when-changed
+           (unless (equal context (gethash working-dir codex-ide--last-sent-buffer-contexts))
+             (puthash working-dir context codex-ide--last-sent-buffer-contexts)
+             `((formatted . ,formatted-context)
+               (summary . ,context-summary))))
+          (_ nil))))))
+
 (defun codex-ide--get-buffer-context-for-prompt ()
   "Return the current buffer context string for the current project, or nil."
-  (let ((working-dir (codex-ide--get-working-directory)))
-    (when-let ((context (codex-ide--get-active-buffer-context)))
-      (pcase codex-ide-include-active-buffer-context
-        ('always
-         (puthash working-dir context codex-ide--last-sent-buffer-contexts)
-         (codex-ide--format-buffer-context context))
-        ('when-changed
-         (unless (equal context (gethash working-dir codex-ide--last-sent-buffer-contexts))
-           (puthash working-dir context codex-ide--last-sent-buffer-contexts)
-           (codex-ide--format-buffer-context context)))
-        (_ nil)))))
+  (alist-get 'formatted (codex-ide--context-payload-for-prompt)))
 
 (defun codex-ide--next-request-id (&optional session)
   "Return the next request id for SESSION."
@@ -2514,12 +2656,18 @@ CHOICES is an alist of labels to returned values."
         (codex-ide-log-message session "Process exited")
         (codex-ide--cleanup-session session)))))
 
+(defun codex-ide--compose-turn-payload (prompt)
+  "Build prompt payload metadata for PROMPT in the current working directory."
+  (let* ((context-payload (codex-ide--context-payload-for-prompt))
+         (context-prefix (alist-get 'formatted context-payload))
+         (full-prompt (string-join (delq nil (list context-prefix prompt)) "\n\n")))
+    `((context-summary . ,(alist-get 'summary context-payload))
+      (input . [((type . "text")
+                 (text . ,full-prompt))]))))
+
 (defun codex-ide--compose-turn-input (prompt)
   "Build `turn/start` input items for the current working directory and PROMPT."
-  (let* ((context-prefix (codex-ide--get-buffer-context-for-prompt))
-         (full-prompt (string-join (delq nil (list context-prefix prompt)) "\n\n")))
-    (vector `((type . "text")
-              (text . ,full-prompt)))))
+  (alist-get 'input (codex-ide--compose-turn-payload prompt)))
 
 (defun codex-ide--session-for-current-project ()
   "Return the active session for the current buffer or project."
@@ -2688,7 +2836,8 @@ If no live session exists, prompt to start one."
   "Prompt for a Codex message in the minibuffer and submit it from the Codex buffer.
 If no live session exists for the current buffer, prompt to start one first."
   (interactive)
-  (let ((session (codex-ide--ensure-session-for-current-project)))
+  (let ((origin-buffer (current-buffer))
+        (session (codex-ide--ensure-session-for-current-project)))
     (let ((prompt (read-from-minibuffer
                    "Codex prompt (RET inserts newline, C-j to submit): ")))
       (unless (string-empty-p prompt)
@@ -2699,7 +2848,8 @@ If no live session exists for the current buffer, prompt to start one first."
               (if (codex-ide-session-input-overlay session)
                   (codex-ide--replace-current-input session prompt)
                 (codex-ide--insert-input-prompt session prompt))
-              (codex-ide--submit-prompt))))))))
+              (let ((codex-ide--prompt-origin-buffer origin-buffer))
+                (codex-ide--submit-prompt)))))))))
 
 ;;;###autoload
 (defun codex-ide-previous-prompt-history ()
@@ -2733,7 +2883,8 @@ If no live session exists for the current buffer, prompt to start one first."
          (prompt-to-send (or prompt
                              (if (eq (current-buffer) (codex-ide-session-buffer session))
                                  (codex-ide--current-input session)
-                               (read-string "Codex prompt: ")))))
+                               (read-string "Codex prompt: "))))
+         payload)
     (when (codex-ide-session-current-turn-id session)
       (user-error "A Codex turn is already running"))
     (unless thread-id
@@ -2748,15 +2899,17 @@ If no live session exists for the current buffer, prompt to start one first."
      (length prompt-to-send))
     (unless (eq (current-buffer) (codex-ide-session-buffer session))
       (codex-ide--insert-input-prompt session prompt-to-send))
-    (codex-ide--begin-turn-display session)
+    (setq payload
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--compose-turn-payload prompt-to-send)))
+    (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
     (redisplay)
     (condition-case err
         (codex-ide--request-sync
          session
          "turn/start"
          `((threadId . ,thread-id)
-           (input . ,(with-current-buffer (codex-ide-session-buffer session)
-                       (codex-ide--compose-turn-input prompt-to-send)))))
+           (input . ,(alist-get 'input payload))))
       (error
        (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
        (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
@@ -2787,7 +2940,13 @@ If no live session exists for the current buffer, prompt to start one first."
        session
        "Sending active buffer context for %s"
        (alist-get 'display-file context))
-      (codex-ide--submit-prompt (codex-ide--format-buffer-context context))
+      (codex-ide--submit-prompt
+       (codex-ide--format-buffer-context
+        (codex-ide--context-with-selected-region
+         context
+         (or (and (not (codex-ide--session-buffer-p (current-buffer)))
+                  (current-buffer))
+             (codex-ide--get-active-buffer-object)))))
       (message "Sent active buffer context to Codex")))))
 
 ;;;###autoload

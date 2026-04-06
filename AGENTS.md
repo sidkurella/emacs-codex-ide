@@ -66,6 +66,7 @@ emacs -Q --batch \
 Notes:
 
 - If batch compilation fails because `transient` is unavailable, treat that as a compatibility issue to fix rather than papering over it.
+- If you batch-compile for testing or validation, remove any generated `.elc` files afterward.
 - For quick structural validation when compilation is blocked, use a paren check:
 
 ```bash
@@ -110,4 +111,5 @@ Before finishing work:
 - Run `bin/run-tests.sh`.
 - Add or update ERT tests for behavioral changes.
 - If relevant, verify batch compilation or explain clearly why it failed.
+- Remove any `.elc` files generated during testing or validation.
 - Do not commit unless the user explicitly requested it.

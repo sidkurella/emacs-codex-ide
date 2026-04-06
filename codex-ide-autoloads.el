@@ -54,12 +54,6 @@ Personality for new or resumed Codex threads.")
 (defvar codex-ide-request-timeout 10 "\
 Seconds to wait for synchronous app-server responses.")
 (custom-autoload 'codex-ide-request-timeout "codex-ide" t)
-(defvar codex-ide-enable-log nil "\
-Whether Codex IDE logging is enabled.
-
-When non-nil, Codex IDE keeps a per-project log buffer and records internal
-events plus stderr output from the Codex app-server process.")
-(custom-autoload 'codex-ide-enable-log "codex-ide" nil)
 (defvar codex-ide-log-max-lines 10000 "\
 Maximum number of lines to keep in each Codex log buffer.
 
@@ -114,13 +108,6 @@ Submit the current in-buffer prompt to Codex." t)
 Send the currently tracked Emacs buffer context to the Codex session." t)
 (autoload 'codex-ide-toggle "codex-ide" "\
 Toggle visibility of the Codex window for the current project." t)
-(autoload 'codex-ide-toggle-log "codex-ide" "\
-Toggle Codex IDE logging.
-
-With prefix ARG, enable logging when ARG is positive and disable it
-otherwise.
-
-(fn &optional ARG)" t)
 (autoload 'codex-ide-toggle-recent "codex-ide" "\
 Toggle the most recently used Codex window globally." t)
 (register-definition-prefixes "codex-ide" '("codex-ide-" "make-codex-ide-session"))
