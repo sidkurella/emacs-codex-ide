@@ -111,11 +111,6 @@
   "Face used for failed or disconnected Codex session states in the mode line."
   :group 'codex-ide)
 
-(defface codex-ide-header-line-status-face
-  '((t :inherit header-line :weight semibold))
-  "Face used for the status prefix in the Codex session header line."
-  :group 'codex-ide)
-
 ;;;###autoload
 (defcustom codex-ide-cli-path "codex"
   "Path to the Codex CLI executable."
@@ -184,17 +179,6 @@
 (defcustom codex-ide-session-enable-visual-line-mode t
   "Whether Codex session buffers should enable `visual-line-mode' by default."
   :type 'boolean
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-header-line-status-style 'auto
-  "How the Codex session header line should render status glyphs.
-When set to `auto', use emoji when the current graphical Emacs frame can
-display the configured emoji glyphs, otherwise fall back to safer Unicode
-symbols.  `emoji' and `symbol' force those styles."
-  :type '(choice (const :tag "Auto" auto)
-                 (const :tag "Emoji" emoji)
-                 (const :tag "Symbols" symbol))
   :group 'codex-ide)
 
 ;;;###autoload
@@ -471,38 +455,6 @@ Add this variable to `savehist-additional-variables' to persist it.")
                (string-match-p (rx (or "exit" "exited" "abnormally")) status)))
       'codex-ide-status-error-face)
      (t 'codex-ide-status-busy-face))))
-
-(defun codex-ide--header-line-status-emoji-available-p ()
-  "Return non-nil when configured status emoji glyphs are displayable."
-  (and (display-graphic-p)
-       (seq-every-p #'char-displayable-p
-                    '(?⏳))))
-
-(defun codex-ide--status-glyph-style ()
-  "Return the glyph style to use for header-line status indicators."
-  (pcase codex-ide-header-line-status-style
-    ('emoji 'emoji)
-    ('symbol 'symbol)
-    (_ (if (codex-ide--header-line-status-emoji-available-p)
-           'emoji
-         'symbol))))
-
-(defun codex-ide--status-glyph (status)
-  "Return a glyph representing STATUS for the header line."
-  (let ((status (and (stringp status) (downcase status))))
-    (when (equal status "running")
-      (pcase (codex-ide--status-glyph-style)
-        ('emoji "⏳")
-        (_ "●")))))
-
-(defun codex-ide--header-line-status-prefix (status)
-  "Return a formatted header-line prefix for STATUS."
-  (when-let ((glyph (codex-ide--status-glyph status)))
-    (let ((face (list 'codex-ide-header-line-status-face
-                      (codex-ide--status-face status))))
-      (propertize
-       (format "%s %s  " glyph (codex-ide--status-label status))
-       'face face))))
 
 (defun codex-ide--mode-line-status (&optional session)
   "Return the current modeline status segment for SESSION."
@@ -1285,26 +1237,21 @@ When called interactively, echo the item type in the minibuffer."
                                 (alist-get 'line context))
                       "none"))
              (token-summary
-             (codex-ide--format-token-usage-summary
+              (codex-ide--format-token-usage-summary
                (codex-ide--session-metadata-get session :token-usage)))
              (rate-limit-summary
               (codex-ide--format-rate-limit-summary
-               (codex-ide--session-metadata-get session :rate-limits)))
-             (status (or (codex-ide-session-status session) "disconnected")))
+               (codex-ide--session-metadata-get session :rate-limits))))
         (setq header-line-format
-              (delq
-               nil
-               (list
-                (codex-ide--header-line-status-prefix status)
-                (propertize
-                 (string-join
-                  (delq nil
-                        (list
-                         (format "focus: %s" focus)
-                         token-summary
-                         rate-limit-summary))
-                  "  ")
-                 'face 'codex-ide-header-line-face)))))
+              (propertize
+               (string-join
+                (delq nil
+                      (list
+                       (format "focus: %s" focus)
+                       token-summary
+                       rate-limit-summary))
+                "  ")
+               'face 'codex-ide-header-line-face)))
       (codex-ide--update-mode-line session))))
 
 (defun codex-ide--make-buffer-context (&optional buffer)
