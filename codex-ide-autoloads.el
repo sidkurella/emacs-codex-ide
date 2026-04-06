@@ -201,6 +201,7 @@ Open a small debug/status menu for Codex IDE.
 
 (fn)" t)
 (register-definition-prefixes "codex-ide-transient" '("codex-ide--"))
+
 
 ;;; End of scraped data
 

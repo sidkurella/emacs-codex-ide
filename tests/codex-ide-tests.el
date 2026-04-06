@@ -383,6 +383,38 @@
           (should (null response-error))
           (should (string= (codex-ide-session-status session) "running")))))))
 
+(ert-deftest codex-ide-trace-back-to-log-jumps-to-originating-notification-line ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (shown-buffer nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (line "{\"method\":\"item/reasoning/summaryTextDelta\",\"params\":{\"delta\":\"Reasoning summary\"}}"))
+          (codex-ide--process-message session line)
+          (with-current-buffer (codex-ide-session-buffer session)
+            (goto-char (point-min))
+            (search-forward "Reasoning summary")
+            (let ((marker (get-text-property (1- (point)) codex-ide-log-marker-property)))
+              (should (markerp marker))
+              (should (eq (marker-buffer marker)
+                          (codex-ide-session-log-buffer session)))
+              (with-current-buffer (marker-buffer marker)
+                (goto-char marker)
+                (should (looking-at-p
+                         (regexp-quote
+                          (format "[%s"
+                                  (format-time-string "%Y-")))))
+                (should (search-forward "Processing incoming notification line:" nil t))
+                (should (search-forward line nil t))))
+            (cl-letf (((symbol-function 'pop-to-buffer)
+                       (lambda (buffer &rest _)
+                         (setq shown-buffer buffer)
+                         (set-buffer buffer)
+                         (selected-window))))
+              (codex-ide--trace-back-to-log)
+              (should (eq shown-buffer (codex-ide-session-log-buffer session)))
+              (should (looking-at-p ".*Processing incoming notification line:")))))))))
+
 (ert-deftest codex-ide-send-active-buffer-context-submits-formatted-context ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file

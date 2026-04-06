@@ -781,8 +781,22 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
                               rear-nonsticky (read-only)
                               front-sticky (read-only)))))
 
-(defun codex-ide--append-to-buffer (buffer text &optional face)
-  "Append TEXT to BUFFER as read-only transcript text, optionally using FACE."
+(defconst codex-ide-log-marker-property 'codex-ide-log-marker
+  "Text property storing the log marker for transcript text.")
+
+(defvar codex-ide--current-transcript-log-marker nil
+  "Marker for the log line associated with the transcript text being inserted.")
+
+(defun codex-ide--current-agent-text-properties ()
+  "Return text properties for agent-originated transcript text."
+  (when (markerp codex-ide--current-transcript-log-marker)
+    (list codex-ide-log-marker-property codex-ide--current-transcript-log-marker)))
+
+(defun codex-ide--append-to-buffer (buffer text &optional face properties)
+  "Append TEXT to BUFFER as read-only transcript text.
+When FACE is non-nil, apply it to the inserted text.
+When PROPERTIES is non-nil, it should be a property list applied to the
+inserted text."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
@@ -790,12 +804,24 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
             start)
         (goto-char (point-max))
         (setq start (point))
-        (if face
-            (insert (propertize text 'face face))
-          (insert text))
+        (insert text)
+        (when (or face properties)
+          (add-text-properties
+           start
+           (point)
+           (append (when face (list 'face face))
+                   properties)))
         (codex-ide--freeze-region start (point))
         (when moving
           (goto-char (point-max)))))))
+
+(defun codex-ide--append-agent-text (buffer text &optional face properties)
+  "Append agent-originated TEXT to BUFFER with FACE and PROPERTIES."
+  (codex-ide--append-to-buffer
+   buffer
+   text
+   face
+   (append properties (codex-ide--current-agent-text-properties))))
 
 (defun codex-ide--ensure-output-spacing (buffer)
   "Ensure BUFFER is ready for a new rendered output block."
@@ -824,7 +850,7 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
 
 (defun codex-ide--append-output-separator (buffer)
   "Append a transcript separator rule to BUFFER."
-  (codex-ide--append-to-buffer
+  (codex-ide--append-agent-text
    buffer
    (codex-ide--output-separator-string)
    'codex-ide-output-separator-face))
@@ -1065,14 +1091,29 @@ FORMAT-STRING and ARGS are passed to `format'."
   (when-let ((buffer (codex-ide--ensure-log-buffer session)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
-            (moving (= (point) (point-max))))
+            (moving (= (point) (point-max)))
+            start)
         (goto-char (point-max))
+        (setq start (point))
         (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
         (insert (apply #'format format-string args))
         (insert "\n")
         (codex-ide--trim-log-buffer)
         (when moving
-          (goto-char (point-max)))))))
+          (goto-char (point-max)))
+        (copy-marker start)))))
+
+(defun codex-ide--trace-back-to-log ()
+  "Jump to the log line associated with the transcript text at point."
+  (interactive)
+  (let ((marker (get-text-property (point) codex-ide-log-marker-property)))
+    (unless (markerp marker)
+      (user-error "No log trace available at point"))
+    (unless (buffer-live-p (marker-buffer marker))
+      (user-error "The originating log buffer is no longer available"))
+    (pop-to-buffer (marker-buffer marker))
+    (goto-char marker)
+    (beginning-of-line)))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
@@ -1650,12 +1691,12 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
              (not (string-empty-p text)))
     (let ((trimmed (string-trim-right text)))
       (unless (string-empty-p trimmed)
-        (codex-ide--append-to-buffer
+        (codex-ide--append-agent-text
          buffer
          "diff:\n"
          'codex-ide-item-detail-face)
         (dolist (line (split-string trimmed "\n"))
-          (codex-ide--append-to-buffer
+          (codex-ide--append-agent-text
            buffer
            (concat line "\n")
            (codex-ide--file-change-diff-face line)))))))
@@ -1748,7 +1789,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
     (pcase item-type
       ("commandExecution"
        (when-let ((cwd (alist-get 'cwd item)))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line
            (format "cwd: %s" (abbreviate-file-name cwd)))
@@ -1765,34 +1806,34 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
          (cond
           ((and (equal action-type "findInPage")
                 (alist-get 'pattern action))
-            (codex-ide--append-to-buffer
+            (codex-ide--append-agent-text
              buffer
              (codex-ide--item-detail-line
               (format "pattern: %s" (alist-get 'pattern action)))
             'codex-ide-item-detail-face))
           ((> (length queries) 1)
            (dolist (query queries)
-             (codex-ide--append-to-buffer
+             (codex-ide--append-agent-text
               buffer
               (codex-ide--item-detail-line query)
               'codex-ide-item-detail-face))))))
       ("mcpToolCall"
        (when-let ((arguments (alist-get 'arguments item)))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line
            (format "args: %s" (json-encode arguments)))
           'codex-ide-item-detail-face)))
       ("dynamicToolCall"
        (when-let ((arguments (alist-get 'arguments item)))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line
            (format "args: %s" (json-encode arguments)))
           'codex-ide-item-detail-face)))
       ("fileChange"
        (dolist (change (or (alist-get 'changes item) '()))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line
            (format "%s %s"
@@ -1801,7 +1842,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
           'codex-ide-item-detail-face)))
       ("imageView"
        (when-let ((path (alist-get 'path item)))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line path)
           'codex-ide-item-detail-face))))))
@@ -1816,7 +1857,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (unless (codex-ide-session-output-prefix-inserted session)
         (codex-ide--begin-turn-display session))
       (codex-ide--ensure-output-spacing buffer)
-      (codex-ide--append-to-buffer
+      (codex-ide--append-agent-text
        buffer
        (format "* %s\n" summary)
        'codex-ide-item-summary-face)
@@ -1838,7 +1879,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (unless (codex-ide-session-output-prefix-inserted session)
         (codex-ide--begin-turn-display session))
       (codex-ide--ensure-output-spacing buffer)
-      (codex-ide--append-to-buffer
+      (codex-ide--append-agent-text
        buffer
        (format "* Plan: %s\n" delta)
        'font-lock-doc-face))))
@@ -1854,7 +1895,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (unless (codex-ide-session-output-prefix-inserted session)
         (codex-ide--begin-turn-display session))
       (codex-ide--ensure-output-spacing buffer)
-      (codex-ide--append-to-buffer
+      (codex-ide--append-agent-text
        buffer
        (format "* Reasoning: %s\n" delta)
        'shadow))))
@@ -1871,7 +1912,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       ("commandExecution"
        (cond
         ((equal status "failed")
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line
            (format "failed%s"
@@ -1880,13 +1921,13 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
                      "")))
           'error))
         ((equal status "declined")
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line "declined")
           'warning))))
       ("mcpToolCall"
        (when-let ((error-info (alist-get 'error item)))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line
            (format "error: %s"
@@ -1894,7 +1935,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
           'error)))
       ("dynamicToolCall"
        (when (eq (alist-get 'success item) :json-false)
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-line "tool call failed")
           'error)))
@@ -1909,7 +1950,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
             streamed-diff))))
       ("exitedReviewMode"
        (when-let ((review (alist-get 'review item)))
-         (codex-ide--append-to-buffer
+         (codex-ide--append-agent-text
           buffer
           (codex-ide--item-detail-block review)
           'codex-ide-item-detail-face))))
@@ -1925,7 +1966,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
         (codex-ide--begin-turn-display session))
       (codex-ide--ensure-output-spacing buffer)
       (codex-ide--append-output-separator buffer)
-      (codex-ide--append-to-buffer buffer "\n")
+      (codex-ide--append-agent-text buffer "\n")
       (setf (codex-ide-session-current-message-start-marker session)
             (copy-marker (with-current-buffer buffer (point-max))))
       (setf (codex-ide-session-current-message-item-id session) item-id
@@ -2538,12 +2579,12 @@ CHOICES is an alist of labels to returned values."
              (delta (or (alist-get 'delta params) "")))
          (codex-ide--ensure-agent-message-prefix session item-id)
          (unless (string-empty-p delta)
-           (codex-ide-log-message
+         (codex-ide-log-message
             session
             "Agent delta for item %s (%d chars)"
             item-id
             (length delta)))
-         (codex-ide--append-to-buffer buffer delta)
+         (codex-ide--append-agent-text buffer delta)
          (when-let ((start (codex-ide-session-current-message-start-marker session)))
            (with-current-buffer buffer
              (codex-ide--render-markdown-region start (point-max))))))
@@ -2604,7 +2645,7 @@ CHOICES is an alist of labels to returned values."
         (when interrupted "[Agent interrupted]"))))
       ("error"
        (codex-ide-log-message session "Error notification: %S" params)
-       (codex-ide--append-to-buffer
+       (codex-ide--append-agent-text
         buffer
         (format "\n[Codex error] %S\n" params)
         'error))
@@ -2614,7 +2655,6 @@ CHOICES is an alist of labels to returned values."
 (defun codex-ide--process-message (&optional session line)
   "Process a single JSON LINE for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (codex-ide-log-message session "Processing incoming line: %s" line)
   (let ((message (ignore-errors
                    (json-parse-string line
                                       :object-type 'alist
@@ -2623,6 +2663,7 @@ CHOICES is an alist of labels to returned values."
                                       :false-object :json-false))))
     (cond
      ((null message)
+      (codex-ide-log-message session "Processing incoming line: %s" line)
       (codex-ide-log-message session "Received non-JSON output")
       (codex-ide--append-to-buffer
        (codex-ide-session-buffer session)
@@ -2630,9 +2671,17 @@ CHOICES is an alist of labels to returned values."
        'shadow))
      ((alist-get 'method message)
       (if (alist-get 'id message)
-          (codex-ide--handle-server-request session message)
-        (codex-ide--handle-notification session message)))
+          (progn
+            (codex-ide-log-message session "Processing incoming line: %s" line)
+            (codex-ide--handle-server-request session message))
+        (let ((codex-ide--current-transcript-log-marker
+               (codex-ide-log-message
+                session
+                "Processing incoming notification line: %s"
+                line)))
+          (codex-ide--handle-notification session message))))
      ((alist-get 'id message)
+      (codex-ide-log-message session "Processing incoming line: %s" line)
       (codex-ide--handle-response session message)))))
 
 (defun codex-ide--process-filter (process chunk)
