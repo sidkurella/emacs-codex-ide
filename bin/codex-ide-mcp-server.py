@@ -112,7 +112,7 @@ class EmacsProxy:
 
     def _tool_call_expression(self, name: str, params: dict[str, Any]) -> str:
         payload = json.dumps({"name": name, "params": params}, separators=(",", ":"), ensure_ascii=True)
-        return f"(codex-ide-bridge--json-tool-call {self._elisp_string(payload)})"
+        return f"(codex-ide-mcp-bridge--json-tool-call {self._elisp_string(payload)})"
 
     def call_tool(self, name: str, params: dict[str, Any] | None = None) -> Any:
         params = params or {}

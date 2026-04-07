@@ -1,4 +1,4 @@
-;;; codex-ide-bridge.el --- Emacs MCP bridge helpers for codex-ide -*- lexical-binding: t; -*-
+;;; codex-ide-mcp-bridge.el --- Emacs MCP bridge helpers for codex-ide -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
@@ -6,7 +6,7 @@
 
 ;; This module provides the Emacs-side half of the optional Codex MCP bridge.
 ;; The external MCP server talks to the running Emacs instance via emacsclient
-;; and dispatches JSON tool calls into `codex-ide-bridge--tool-call'.
+;; and dispatches JSON tool calls into `codex-ide-mcp-bridge--tool-call'.
 
 ;;; Code:
 
@@ -15,7 +15,7 @@
 (require 'server)
 (require 'subr-x)
 
-(defconst codex-ide-bridge--directory
+(defconst codex-ide-mcp-bridge--directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the codex-ide bridge files.")
 
@@ -68,7 +68,7 @@ When nil, use the current value of `server-name'."
 (defcustom codex-ide-suppress-server-start-prompts nil
   "When non-nil, start the Emacs server for the bridge without prompting.
 
-This only affects explicit calls to `codex-ide-bridge-ensure-server'.  Session
+This only affects explicit calls to `codex-ide-mcp-bridge-ensure-server'.  Session
 startup now prompts once about enabling the Emacs tool bridge, and enabling the
 bridge starts the Emacs server automatically when needed."
   :type 'boolean
@@ -96,14 +96,14 @@ one of its tools."
   :type 'boolean
   :group 'codex-ide)
 
-(defconst codex-ide-bridge--tool-names
+(defconst codex-ide-mcp-bridge--tool-names
   '("emacs_open_file"
     "emacs_all_open_files"
     "emacs_get_diagnostics"
     "emacs_window_list")
   "Tool names exposed by the Emacs MCP bridge.")
 
-(defun codex-ide-bridge--toml-string (value)
+(defun codex-ide-mcp-bridge--toml-string (value)
   "Encode VALUE as a TOML string."
   (format "\"%s\""
           (replace-regexp-in-string
@@ -113,31 +113,31 @@ one of its tools."
                                      t t)
            t t)))
 
-(defun codex-ide-bridge--toml-array (values)
+(defun codex-ide-mcp-bridge--toml-array (values)
   "Encode VALUES as a TOML array."
   (format "[%s]"
-          (string-join (mapcar #'codex-ide-bridge--toml-string values) ",")))
+          (string-join (mapcar #'codex-ide-mcp-bridge--toml-string values) ",")))
 
-(defun codex-ide-bridge--resolved-script-path ()
+(defun codex-ide-mcp-bridge--resolved-script-path ()
   "Return the absolute path to the standalone bridge script."
   (expand-file-name
    (or codex-ide-emacs-bridge-script-path "bin/codex-ide-mcp-server.py")
-   codex-ide-bridge--directory))
+   codex-ide-mcp-bridge--directory))
 
-(defun codex-ide-bridge--resolved-server-name ()
+(defun codex-ide-mcp-bridge--resolved-server-name ()
   "Return the emacsclient server name the bridge should target."
   (or codex-ide-emacs-bridge-server-name server-name))
 
-(defun codex-ide-bridge--approval-match-patterns ()
+(defun codex-ide-mcp-bridge--approval-match-patterns ()
   "Return strings that identify the configured Emacs MCP bridge."
   (delete-dups
    (delq nil
          (append
           (list codex-ide-emacs-tool-bridge-name
                 (format "mcp_servers.%s" codex-ide-emacs-tool-bridge-name))
-          codex-ide-bridge--tool-names))))
+          codex-ide-mcp-bridge--tool-names))))
 
-(defun codex-ide-bridge--request-mentions-pattern-p (value patterns)
+(defun codex-ide-mcp-bridge--request-mentions-pattern-p (value patterns)
   "Return non-nil when VALUE recursively contains any string in PATTERNS."
   (let ((case-fold-search t))
     (cond
@@ -146,77 +146,77 @@ one of its tools."
                   (string-match-p (regexp-quote pattern) value))
                 patterns))
      ((symbolp value)
-      (codex-ide-bridge--request-mentions-pattern-p (symbol-name value) patterns))
+      (codex-ide-mcp-bridge--request-mentions-pattern-p (symbol-name value) patterns))
      ((hash-table-p value)
       (let ((matched nil))
         (maphash (lambda (key entry)
-                   (when (or (codex-ide-bridge--request-mentions-pattern-p key patterns)
-                             (codex-ide-bridge--request-mentions-pattern-p entry patterns))
+                   (when (or (codex-ide-mcp-bridge--request-mentions-pattern-p key patterns)
+                             (codex-ide-mcp-bridge--request-mentions-pattern-p entry patterns))
                      (setq matched t)))
                  value)
         matched))
      ((vectorp value)
       (seq-some (lambda (entry)
-                  (codex-ide-bridge--request-mentions-pattern-p entry patterns))
+                  (codex-ide-mcp-bridge--request-mentions-pattern-p entry patterns))
                 value))
      ((consp value)
-      (or (codex-ide-bridge--request-mentions-pattern-p (car value) patterns)
-          (codex-ide-bridge--request-mentions-pattern-p (cdr value) patterns)))
+      (or (codex-ide-mcp-bridge--request-mentions-pattern-p (car value) patterns)
+          (codex-ide-mcp-bridge--request-mentions-pattern-p (cdr value) patterns)))
      (t nil))))
 
 ;;;###autoload
-(defun codex-ide-bridge-request-exempt-from-approval-p (params)
+(defun codex-ide-mcp-bridge-request-exempt-from-approval-p (params)
   "Return non-nil when PARAMS describe an Emacs MCP bridge request.
 
 This is used to bypass user confirmation for bridge-originated approval
 requests when `codex-ide-emacs-bridge-require-approval' is nil."
   (and (not codex-ide-emacs-bridge-require-approval)
-       (codex-ide-bridge--request-mentions-pattern-p
+       (codex-ide-mcp-bridge--request-mentions-pattern-p
         params
-        (codex-ide-bridge--approval-match-patterns))))
+        (codex-ide-mcp-bridge--approval-match-patterns))))
 
 ;;;###autoload
-(defun codex-ide-bridge-enabled-p ()
+(defun codex-ide-mcp-bridge-enabled-p ()
   "Return non-nil when the Emacs MCP bridge should be enabled."
   codex-ide-enable-emacs-tool-bridge)
 
 ;;;###autoload
-(defun codex-ide-bridge-enable ()
+(defun codex-ide-mcp-bridge-enable ()
   "Enable the Emacs MCP bridge and ensure the target Emacs server is running."
   (setq codex-ide-enable-emacs-tool-bridge t)
-  (codex-ide-bridge-ensure-server))
+  (codex-ide-mcp-bridge-ensure-server))
 
 ;;;###autoload
-(defun codex-ide-bridge-disable ()
+(defun codex-ide-mcp-bridge-disable ()
   "Disable the Emacs MCP bridge."
   (setq codex-ide-enable-emacs-tool-bridge nil)
   codex-ide-enable-emacs-tool-bridge)
 
 ;;;###autoload
-(defun codex-ide-bridge-prompt-to-enable ()
+(defun codex-ide-mcp-bridge-prompt-to-enable ()
   "Prompt once to enable the Emacs MCP bridge for session startup."
-  (when (and (not (codex-ide-bridge-enabled-p))
+  (when (and (not (codex-ide-mcp-bridge-enabled-p))
              (y-or-n-p "Enable the Emacs tool bridge for this Codex session? "))
-    (codex-ide-bridge-enable)))
+    (codex-ide-mcp-bridge-enable)))
 
-(defun codex-ide-bridge--ensure-server-running-p (target-server-name)
+(defun codex-ide-mcp-bridge--ensure-server-running-p (target-server-name)
   "Return non-nil when TARGET-SERVER-NAME is running.
 Errors from `server-running-p' are treated as nil."
   (server-running-p target-server-name))
 
 ;;;###autoload
-(defun codex-ide-bridge-status ()
+(defun codex-ide-mcp-bridge-status ()
   "Return an alist describing the current Emacs bridge configuration."
-  (let* ((enabled (codex-ide-bridge-enabled-p))
-         (script-path (codex-ide-bridge--resolved-script-path))
+  (let* ((enabled (codex-ide-mcp-bridge-enabled-p))
+         (script-path (codex-ide-mcp-bridge--resolved-script-path))
          (python-path (and enabled
                            (executable-find codex-ide-emacs-bridge-python-command)))
          (emacsclient-path (and enabled
                                 (executable-find
                                  codex-ide-emacs-bridge-emacsclient-command)))
-         (server-name (codex-ide-bridge--resolved-server-name))
+         (server-name (codex-ide-mcp-bridge--resolved-server-name))
          (server-running (and enabled
-                              (codex-ide-bridge--ensure-server-running-p
+                              (codex-ide-mcp-bridge--ensure-server-running-p
                                server-name)))
          (ready (and enabled
                      (file-exists-p script-path)
@@ -234,20 +234,20 @@ Errors from `server-running-p' are treated as nil."
       (serverRunning . ,server-running))))
 
 ;;;###autoload
-(defun codex-ide-bridge-ensure-server ()
+(defun codex-ide-mcp-bridge-ensure-server ()
   "Ensure the target Emacs server for the bridge is running."
-  (when (codex-ide-bridge-enabled-p)
-    (let ((server-name (codex-ide-bridge--resolved-server-name)))
-      (unless (codex-ide-bridge--ensure-server-running-p server-name)
+  (when (codex-ide-mcp-bridge-enabled-p)
+    (let ((server-name (codex-ide-mcp-bridge--resolved-server-name)))
+      (unless (codex-ide-mcp-bridge--ensure-server-running-p server-name)
         (server-start nil codex-ide-suppress-server-start-prompts)))))
 
 ;;;###autoload
-(defun codex-ide-bridge-mcp-config-args ()
+(defun codex-ide-mcp-bridge-mcp-config-args ()
   "Return `codex app-server' CLI args that register the Emacs MCP bridge."
-  (when (codex-ide-bridge-enabled-p)
+  (when (codex-ide-mcp-bridge-enabled-p)
     (let* ((bridge-name codex-ide-emacs-tool-bridge-name)
            (prefix (format "mcp_servers.%s" bridge-name))
-           (script-path (codex-ide-bridge--resolved-script-path))
+           (script-path (codex-ide-mcp-bridge--resolved-script-path))
            (python-command
             (or (executable-find codex-ide-emacs-bridge-python-command)
                 codex-ide-emacs-bridge-python-command))
@@ -264,11 +264,11 @@ Errors from `server-running-p' are treated as nil."
                       (list "--server-name" server-name)))))
       (list "-c" (format "%s.command=%s"
                          prefix
-                         (codex-ide-bridge--toml-string
+                         (codex-ide-mcp-bridge--toml-string
                           python-command))
             "-c" (format "%s.args=%s"
                          prefix
-                         (codex-ide-bridge--toml-array script-args))
+                         (codex-ide-mcp-bridge--toml-array script-args))
             "-c" (format "%s.startup_timeout_sec=%s"
                          prefix
                          codex-ide-emacs-bridge-startup-timeout)
@@ -276,7 +276,7 @@ Errors from `server-running-p' are treated as nil."
                          prefix
                          codex-ide-emacs-bridge-tool-timeout)))))
 
-(defun codex-ide-bridge--current-context ()
+(defun codex-ide-mcp-bridge--current-context ()
   "Return the current Emacs buffer context as an alist."
   (or (and (fboundp 'codex-ide--make-buffer-context)
            (codex-ide--make-buffer-context (current-buffer)))
@@ -288,7 +288,7 @@ Errors from `server-running-p' are treated as nil."
             (line . ,(line-number-at-pos))
             (column . ,(current-column)))))))
 
-(defun codex-ide-bridge--buffer-summary (buffer)
+(defun codex-ide-mcp-bridge--buffer-summary (buffer)
   "Return a summary alist for BUFFER."
   (with-current-buffer buffer
     `((buffer . ,(buffer-name buffer))
@@ -298,7 +298,7 @@ Errors from `server-running-p' are treated as nil."
       (modified . ,(buffer-modified-p buffer))
       (read-only . ,buffer-read-only))))
 
-(defun codex-ide-bridge--diagnostic-severity (diagnostic)
+(defun codex-ide-mcp-bridge--diagnostic-severity (diagnostic)
   "Return a normalized severity string for DIAGNOSTIC."
   (cond
    ((and (fboundp 'flymake-diagnostic-type)
@@ -326,7 +326,7 @@ Errors from `server-running-p' are treated as nil."
        (t "unknown"))))
    (t "unknown")))
 
-(defun codex-ide-bridge--flymake-diagnostics ()
+(defun codex-ide-mcp-bridge--flymake-diagnostics ()
   "Return current Flymake diagnostics as a list of alists."
   (when (and (boundp 'flymake-mode)
              flymake-mode
@@ -338,7 +338,7 @@ Errors from `server-running-p' are treated as nil."
          (file . ,(when-let ((file (buffer-file-name)))
                     (expand-file-name file)))
          (message . ,(flymake-diagnostic-text diag))
-         (severity . ,(codex-ide-bridge--diagnostic-severity diag))
+         (severity . ,(codex-ide-mcp-bridge--diagnostic-severity diag))
          (line . ,(line-number-at-pos (flymake-diagnostic-beg diag)))
          (column . ,(save-excursion
                       (goto-char (flymake-diagnostic-beg diag))
@@ -349,7 +349,7 @@ Errors from `server-running-p' are treated as nil."
                           (1+ (current-column))))))
      (flymake-diagnostics))))
 
-(defun codex-ide-bridge--flycheck-diagnostics ()
+(defun codex-ide-mcp-bridge--flycheck-diagnostics ()
   "Return current Flycheck diagnostics as a list of alists."
   (when (and (boundp 'flycheck-mode)
              flycheck-mode
@@ -366,7 +366,7 @@ Errors from `server-running-p' are treated as nil."
          (message . ,(or (and (fboundp 'flycheck-error-message)
                               (flycheck-error-message err))
                          ""))
-         (severity . ,(codex-ide-bridge--diagnostic-severity err))
+         (severity . ,(codex-ide-mcp-bridge--diagnostic-severity err))
          (line . ,(or (and (fboundp 'flycheck-error-line)
                            (flycheck-error-line err))
                       1))
@@ -381,9 +381,9 @@ Errors from `server-running-p' are treated as nil."
                             :json-null))))
      flycheck-current-errors)))
 
-(defun codex-ide-bridge--tool-call (name params)
+(defun codex-ide-mcp-bridge--tool-call (name params)
   "Dispatch bridge tool NAME using PARAMS."
-  (let ((handler (intern-soft (format "codex-ide-bridge--tool-call--%s" name))))
+  (let ((handler (intern-soft (format "codex-ide-mcp-bridge--tool-call--%s" name))))
     (if (fboundp handler)
         (funcall handler params)
       (let ((error-message (format "Bridge tool not implemented: %s" name)))
@@ -391,7 +391,7 @@ Errors from `server-running-p' are treated as nil."
         `((error . ,error-message))))))
 
 ;;;###autoload
-(defun codex-ide-bridge--json-tool-call (payload)
+(defun codex-ide-mcp-bridge--json-tool-call (payload)
   "Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON."
   (let* ((json-object-type 'alist)
          (json-array-type 'list)
@@ -402,16 +402,16 @@ Errors from `server-running-p' are treated as nil."
          (params (or (alist-get 'params request) '())))
     (unless (stringp name)
       (error "Missing tool name"))
-    (json-encode (codex-ide-bridge--tool-call name params))))
+    (json-encode (codex-ide-mcp-bridge--tool-call name params))))
 
 ;; These functions are the Elisp implementations of the MCP bridge commands.
 
-(defun codex-ide-bridge--tool-call--emacs_get_context (_params)
+(defun codex-ide-mcp-bridge--tool-call--emacs_get_context (_params)
   "Handle an `emacs_get_context' bridge request."
-  (or (codex-ide-bridge--current-context)
+  (or (codex-ide-mcp-bridge--current-context)
       '((context . :json-null))))
 
-(defun codex-ide-bridge--tool-call--emacs_open_file (params)
+(defun codex-ide-mcp-bridge--tool-call--emacs_open_file (params)
   "Handle an `emacs_open_file' bridge request with PARAMS."
   (let ((path (alist-get 'path params))
         (line (alist-get 'line params))
@@ -430,7 +430,7 @@ Errors from `server-running-p' are treated as nil."
       (line . ,(line-number-at-pos))
       (column . ,(1+ (current-column))))))
 
-(defun codex-ide-bridge--tool-call--emacs_all_open_files (_params)
+(defun codex-ide-mcp-bridge--tool-call--emacs_all_open_files (_params)
   "Handle an `emacs_all_open_files' bridge request."
   `((files . ,(seq-filter
                #'identity
@@ -445,7 +445,7 @@ Errors from `server-running-p' are treated as nil."
                         (read-only . ,buffer-read-only)))))
                 (buffer-list))))))
 
-(defun codex-ide-bridge--tool-call--emacs_get_diagnostics (params)
+(defun codex-ide-mcp-bridge--tool-call--emacs_get_diagnostics (params)
   "Handle an `emacs_get_diagnostics' bridge request with PARAMS."
   (let* ((buffer-name (alist-get 'buffer params))
          (buffer (and (stringp buffer-name)
@@ -456,11 +456,11 @@ Errors from `server-running-p' are treated as nil."
       `((buffer . ,(buffer-name buffer))
         (file . ,(when-let ((file (buffer-file-name buffer)))
                    (expand-file-name file)))
-        (diagnostics . ,(or (codex-ide-bridge--flymake-diagnostics)
-                            (codex-ide-bridge--flycheck-diagnostics)
+        (diagnostics . ,(or (codex-ide-mcp-bridge--flymake-diagnostics)
+                            (codex-ide-mcp-bridge--flycheck-diagnostics)
                             '()))))))
 
-(defun codex-ide-bridge--tool-call--emacs_window_list (_params)
+(defun codex-ide-mcp-bridge--tool-call--emacs_window_list (_params)
   "Handle an `emacs_window_list' bridge request."
   (let ((windows
          (mapcar
@@ -472,10 +472,10 @@ Errors from `server-running-p' are treated as nil."
                 (point . ,(window-point window))
                 (start . ,(window-start window))
                 (edges . ,(append (window-edges window) nil))
-                (buffer-info . ,(codex-ide-bridge--buffer-summary buffer)))))
+                (buffer-info . ,(codex-ide-mcp-bridge--buffer-summary buffer)))))
           (window-list (selected-frame) 'no-minibuf (frame-first-window)))))
     `((windows . ,windows))))
 
-(provide 'codex-ide-bridge)
+(provide 'codex-ide-mcp-bridge)
 
-;;; codex-ide-bridge.el ends here
+;;; codex-ide-mcp-bridge.el ends here

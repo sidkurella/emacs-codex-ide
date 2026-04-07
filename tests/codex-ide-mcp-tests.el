@@ -63,7 +63,7 @@
           (should (equal (aref argv 0) "-s"))
           (should (equal (aref argv 1) "testsrv"))
           (should (equal (aref argv 2) "--eval"))
-          (should (string-match-p "codex-ide-bridge--json-tool-call"
+          (should (string-match-p "codex-ide-mcp-bridge--json-tool-call"
                                   (aref argv 3)))
           (with-current-buffer output-buffer
             (should (string-match-p "\"jsonrpc\":\"2.0\"" (buffer-string)))))

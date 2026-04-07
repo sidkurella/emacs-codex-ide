@@ -9,8 +9,8 @@
 (require 'subr-x)
 (require 'transient)
 
-(declare-function codex-ide-bridge-enable "codex-ide-bridge" ())
-(declare-function codex-ide-bridge-disable "codex-ide-bridge" ())
+(declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
+(declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-resume "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
@@ -194,8 +194,8 @@
   "Toggle `codex-ide-enable-emacs-tool-bridge'."
   (interactive)
   (if codex-ide-enable-emacs-tool-bridge
-      (codex-ide-bridge-disable)
-    (codex-ide-bridge-enable))
+      (codex-ide-mcp-bridge-disable)
+    (codex-ide-mcp-bridge-enable))
   (message "Emacs callback bridge %s"
            (if codex-ide-enable-emacs-tool-bridge "enabled" "disabled")))
 

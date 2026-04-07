@@ -11,15 +11,15 @@ This file gives project-specific instructions for agents working on `codex-ide`.
 Keep the module boundaries clear:
 
 - `codex-ide.el`: main package entry point and core session UI. Owns session lifecycle, process management, JSON-RPC transport, transcript rendering, prompt submission, session/log buffers, modeline/header state, and project-aware buffer context.
-- `codex-ide-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
-- `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-bridge--json-tool-call`.
+- `codex-ide-mcp-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
+- `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-mcp-bridge--json-tool-call`.
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
 - `tests/codex-ide-tests.el`: ERT coverage for session setup, command assembly, process handling, bridge config, context composition, and transcript behavior.
 - `bin/run-tests.sh`: canonical test runner.
 
 Design expectations:
 
-- Keep core behavior in `codex-ide.el` and `codex-ide-bridge.el`; UI wrappers should stay thin.
+- Keep core behavior in `codex-ide.el` and `codex-ide-mcp-bridge.el`; UI wrappers should stay thin.
 - Prefer built-in Emacs facilities and stock-Emacs-compatible code paths.
 - Do not add new external package dependencies.
 - When touching architecture, preserve the model that Codex runs as an Emacs-native agent UI with optional bridge access back into the live editor.
@@ -60,7 +60,7 @@ emacs -Q --batch \
   --eval "(setq load-prefer-newer t)" \
   -L . \
   -f batch-byte-compile \
-  codex-ide.el codex-ide-bridge.el codex-ide-transient.el
+  codex-ide.el codex-ide-mcp-bridge.el codex-ide-transient.el
 ```
 
 Notes:
@@ -76,7 +76,7 @@ emacs -Q --batch --eval "(with-temp-buffer (insert-file-contents \"codex-ide.el\
 Reload changed files into the running Emacs session over the bridge:
 
 ```bash
-emacsclient --eval '(progn (load-file "/absolute/path/to/codex-ide-bridge.el") (load-file "/absolute/path/to/codex-ide-transient.el") (load-file "/absolute/path/to/codex-ide.el") "ok")'
+emacsclient --eval '(progn (load-file "/absolute/path/to/codex-ide-mcp-bridge.el") (load-file "/absolute/path/to/codex-ide-transient.el") (load-file "/absolute/path/to/codex-ide.el") "ok")'
 ```
 
 Reload a single file into the running Emacs session:
@@ -88,7 +88,7 @@ emacsclient --eval '(progn (load-file "/absolute/path/to/codex-ide.el") "ok")'
 Check bridge status from Emacs:
 
 ```bash
-emacsclient --eval '(codex-ide-bridge-status)'
+emacsclient --eval '(codex-ide-mcp-bridge-status)'
 ```
 
 Run an Emacs command over the bridge:

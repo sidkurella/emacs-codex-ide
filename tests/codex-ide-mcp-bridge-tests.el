@@ -1,4 +1,4 @@
-;;; codex-ide-bridge-tests.el --- Tests for codex-ide-bridge -*- lexical-binding: t; -*-
+;;; codex-ide-mcp-bridge-tests.el --- Tests for codex-ide-mcp-bridge -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -9,9 +9,9 @@
 (require 'ert)
 (require 'codex-ide-test-fixtures)
 (require 'codex-ide)
-(require 'codex-ide-bridge)
+(require 'codex-ide-mcp-bridge)
 
-(ert-deftest codex-ide-bridge-mcp-config-args-reflect-enabled-settings ()
+(ert-deftest codex-ide-mcp-bridge-mcp-config-args-reflect-enabled-settings ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (let ((codex-ide-enable-emacs-tool-bridge t)
@@ -29,13 +29,13 @@
                        ("emacsclient" "/usr/bin/emacsclient")
                        (_ nil)))))
           (should
-           (equal (codex-ide-bridge-mcp-config-args)
+           (equal (codex-ide-mcp-bridge-mcp-config-args)
                   '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
                     "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
                     "-c" "mcp_servers.editor.startup_timeout_sec=15"
                     "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
-(ert-deftest codex-ide-bridge-mcp-config-args-omit-default-server-name ()
+(ert-deftest codex-ide-mcp-bridge-mcp-config-args-omit-default-server-name ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (let ((codex-ide-enable-emacs-tool-bridge t)
@@ -53,37 +53,37 @@
                        ("emacsclient" "/usr/bin/emacsclient")
                        (_ nil)))))
           (should
-           (equal (codex-ide-bridge-mcp-config-args)
+           (equal (codex-ide-mcp-bridge-mcp-config-args)
                   '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
                     "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\"]"
                     "-c" "mcp_servers.editor.startup_timeout_sec=15"
                     "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
-(ert-deftest codex-ide-bridge-request-exempt-from-approval-matches-bridge-tool-payload ()
+(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-matches-bridge-tool-payload ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (let ((codex-ide-emacs-tool-bridge-name "editor")
             (codex-ide-emacs-bridge-require-approval nil))
         (should
-         (codex-ide-bridge-request-exempt-from-approval-p
+         (codex-ide-mcp-bridge-request-exempt-from-approval-p
           '((message . "Allow editor to run emacs_get_diagnostics")
             (tool . "emacs_get_diagnostics"))))
         (should-not
-         (codex-ide-bridge-request-exempt-from-approval-p
+         (codex-ide-mcp-bridge-request-exempt-from-approval-p
           '((message . "Allow another server to run search_web")
             (tool . "search_web"))))))))
 
-(ert-deftest codex-ide-bridge-request-exempt-from-approval-respects-require-approval ()
+(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-respects-require-approval ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (let ((codex-ide-emacs-tool-bridge-name "editor")
             (codex-ide-emacs-bridge-require-approval t))
         (should-not
-         (codex-ide-bridge-request-exempt-from-approval-p
+         (codex-ide-mcp-bridge-request-exempt-from-approval-p
           '((message . "Allow editor to run emacs_get_diagnostics")
             (tool . "emacs_get_diagnostics"))))))))
 
-(ert-deftest codex-ide-bridge-permissions-approval-auto-accepts-bridge-requests ()
+(ert-deftest codex-ide-mcp-bridge-permissions-approval-auto-accepts-bridge-requests ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (response nil)
         (captured-prompt nil))
@@ -116,7 +116,7 @@
                   '(((tool . "emacs_get_diagnostics"))
                     ((server . "editor"))))))))))
 
-(ert-deftest codex-ide-bridge-elicitation-auto-accepts-bridge-approval-prompts ()
+(ert-deftest codex-ide-mcp-bridge-elicitation-auto-accepts-bridge-approval-prompts ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (response nil)
         (handler-called nil))
@@ -143,7 +143,7 @@
           (should-not handler-called)
           (should (equal response '(18 ((action . "accept"))))))))))
 
-(ert-deftest codex-ide-bridge-emacs-all-open-files-lists-file-backed-buffers ()
+(ert-deftest codex-ide-mcp-bridge-emacs-all-open-files-lists-file-backed-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "a.el" "(message \"a\")\n"))
          (file-b (codex-ide-test--make-project-file project-dir "b.el" "(message \"b\")\n")))
@@ -154,7 +154,7 @@
           (set-buffer-modified-p t))
         (with-temp-buffer
           (let ((files (alist-get 'files
-                                  (codex-ide-bridge--tool-call--emacs_all_open_files nil))))
+                                  (codex-ide-mcp-bridge--tool-call--emacs_all_open_files nil))))
             (should (equal (alist-get 'major-mode
                                       (seq-find (lambda (item)
                                                   (equal (alist-get 'file item) file-a))
@@ -167,19 +167,19 @@
                                            (equal (alist-get 'file item) file-b))
                                          files)))))))))
 
-(ert-deftest codex-ide-bridge-emacs-get-diagnostics-returns-empty-when-disabled ()
+(ert-deftest codex-ide-mcp-bridge-emacs-get-diagnostics-returns-empty-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (buffer (get-buffer-create " *codex-ide-diagnostics-none*")))
     (codex-ide-test-with-fixture project-dir
       (with-current-buffer buffer
         (setq-local flymake-mode nil)
         (setq-local flycheck-mode nil)
-        (let ((result (codex-ide-bridge--tool-call--emacs_get_diagnostics
+        (let ((result (codex-ide-mcp-bridge--tool-call--emacs_get_diagnostics
                        `((buffer . ,(buffer-name buffer))))))
           (should (equal (alist-get 'buffer result) (buffer-name buffer)))
           (should (equal (alist-get 'diagnostics result) '())))))))
 
-(ert-deftest codex-ide-bridge-emacs-get-diagnostics-prefers-flymake ()
+(ert-deftest codex-ide-mcp-bridge-emacs-get-diagnostics-prefers-flymake ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (buffer (get-buffer-create " *codex-ide-diagnostics-flymake*")))
     (codex-ide-test-with-fixture project-dir
@@ -198,7 +198,7 @@
                      (lambda (_diag) 1))
                     ((symbol-function 'flymake-diagnostic-end)
                      (lambda (_diag) 6)))
-            (let* ((result (codex-ide-bridge--tool-call--emacs_get_diagnostics
+            (let* ((result (codex-ide-mcp-bridge--tool-call--emacs_get_diagnostics
                             `((buffer . ,(buffer-name buffer)))))
                    (diagnostics (alist-get 'diagnostics result))
                    (diag (car diagnostics)))
@@ -209,7 +209,7 @@
               (should (= (alist-get 'line diag) 1))
               (should (= (alist-get 'column diag) 1)))))))))
 
-(ert-deftest codex-ide-bridge-emacs-window-list-describes-visible-windows ()
+(ert-deftest codex-ide-mcp-bridge-emacs-window-list-describes-visible-windows ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "one.el" "(message \"one\")\n"))
          (file-b (codex-ide-test--make-project-file project-dir "two.el" "(message \"two\")\n")))
@@ -221,7 +221,7 @@
         (let ((other-window (split-window-right)))
           (set-window-buffer other-window buffer-b)
           (let ((windows (alist-get 'windows
-                                    (codex-ide-bridge--tool-call--emacs_window_list nil))))
+                                    (codex-ide-mcp-bridge--tool-call--emacs_window_list nil))))
             (should (= (length windows) 2))
             (should (equal (alist-get 'buffer
                                       (alist-get 'buffer-info (car windows)))
@@ -234,6 +234,6 @@
                            "emacs-lisp-mode"))
             (should (listp (alist-get 'edges (car windows))))))))))
 
-(provide 'codex-ide-bridge-tests)
+(provide 'codex-ide-mcp-bridge-tests)
 
-;;; codex-ide-bridge-tests.el ends here
+;;; codex-ide-mcp-bridge-tests.el ends here

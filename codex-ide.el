@@ -34,7 +34,7 @@
   :group 'tools
   :prefix "codex-ide-")
 
-(require 'codex-ide-bridge)
+(require 'codex-ide-mcp-bridge)
 
 (defface codex-ide-user-prompt-face
   '((((class color) (background light))
@@ -719,7 +719,7 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
 (defun codex-ide--app-server-command ()
   "Build the `codex app-server` command list."
   (append (list codex-ide-cli-path "app-server" "--listen" "stdio://")
-          (codex-ide-bridge-mcp-config-args)
+          (codex-ide-mcp-bridge-mcp-config-args)
           (when (not (string-empty-p codex-ide-cli-extra-flags))
             (split-string-shell-command codex-ide-cli-extra-flags))))
 
@@ -2307,8 +2307,8 @@ MODE can be nil or `new', `continue', or `resume'."
     (user-error "Codex CLI not available. Install it and ensure it is on PATH"))
   (codex-ide--cleanup-dead-sessions)
   (codex-ide--ensure-active-buffer-tracking)
-  (codex-ide-bridge-prompt-to-enable)
-  (codex-ide-bridge-ensure-server)
+  (codex-ide-mcp-bridge-prompt-to-enable)
+  (codex-ide-mcp-bridge-ensure-server)
   (let* ((working-dir (codex-ide--get-working-directory))
          (existing-session (codex-ide--get-session))
          (existing-buffer (and existing-session
@@ -2326,7 +2326,7 @@ MODE can be nil or `new', `continue', or `resume'."
         (condition-case err
             (progn
               (codex-ide-log-message session "Starting session in mode %s" (or mode 'new))
-              (codex-ide-bridge-ensure-server)
+              (codex-ide-mcp-bridge-ensure-server)
               (codex-ide--initialize-session session)
               (pcase (or mode 'new)
                 ('new
@@ -2415,8 +2415,8 @@ CHOICES is an alist of labels to returned values."
 
 (defun codex-ide--auto-approve-emacs-bridge-request-p (params)
   "Return non-nil when PARAMS should bypass user approval for the Emacs bridge."
-  (and (fboundp 'codex-ide-bridge-request-exempt-from-approval-p)
-       (codex-ide-bridge-request-exempt-from-approval-p params)))
+  (and (fboundp 'codex-ide-mcp-bridge-request-exempt-from-approval-p)
+       (codex-ide-mcp-bridge-request-exempt-from-approval-p params)))
 
 (defun codex-ide--format-command-approval-prompt (command params)
   "Build a command approval prompt for COMMAND using PARAMS."
@@ -2851,7 +2851,7 @@ If no live session exists, prompt to start one."
               (with-temp-buffer
                 (call-process codex-ide-cli-path nil t nil "--version")
                 (string-trim (buffer-string))))
-             (bridge-status (codex-ide-bridge-status))
+             (bridge-status (codex-ide-mcp-bridge-status))
              (bridge-enabled (alist-get 'enabled bridge-status))
              (bridge-ready (alist-get 'ready bridge-status))
              (bridge-script (alist-get 'scriptPath bridge-status))

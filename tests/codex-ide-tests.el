@@ -18,7 +18,7 @@
   (let ((codex-ide-cli-path "/tmp/codex")
         (codex-ide-cli-extra-flags "--model test-model --debug")
         (bridge-args '("-c" "mcp_servers.emacs.command=\"python3\"")))
-    (cl-letf (((symbol-function 'codex-ide-bridge-mcp-config-args)
+    (cl-letf (((symbol-function 'codex-ide-mcp-bridge-mcp-config-args)
                (lambda () bridge-args)))
       (should
        (equal (codex-ide--app-server-command)
@@ -79,9 +79,9 @@
       (codex-ide-test-with-fake-processes
         (cl-letf (((symbol-function 'codex-ide--ensure-cli)
                    (lambda () t))
-                  ((symbol-function 'codex-ide-bridge-prompt-to-enable)
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
                    (lambda () nil))
-                  ((symbol-function 'codex-ide-bridge-ensure-server)
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
                    (lambda () nil))
                   ((symbol-function 'codex-ide--display-buffer-in-side-window)
                    (lambda (_buffer) (selected-window)))
@@ -384,13 +384,13 @@
               (codex-ide--item-type-at-point))
             (should (equal reported "reasoning"))))))))
 
-(ert-deftest codex-ide-bridge-json-tool-call-returns-json-response ()
-  (cl-letf (((symbol-function 'codex-ide-bridge--json-tool-call)
+(ert-deftest codex-ide-mcp-bridge-json-tool-call-returns-json-response ()
+  (cl-letf (((symbol-function 'codex-ide-mcp-bridge--json-tool-call)
              (lambda (payload)
                (should (equal payload "{\"name\":\"test_tool\",\"params\":{\"value\":7}}"))
                "{\"ok\":true,\"value\":7}")))
     (should (equal
-             (codex-ide-bridge--json-tool-call
+             (codex-ide-mcp-bridge--json-tool-call
               "{\"name\":\"test_tool\",\"params\":{\"value\":7}}")
              "{\"ok\":true,\"value\":7}"))))
 
@@ -533,7 +533,7 @@
     (unwind-protect
         (progn
           (dolist (file '("codex-ide.el"
-                          "codex-ide-bridge.el"
+                          "codex-ide-mcp-bridge.el"
                           "codex-ide-transient.el"))
             (copy-file (expand-file-name file codex-ide-test--root-directory)
                        (expand-file-name file temp-dir)
@@ -550,7 +550,7 @@
               (should (string-match-p "(custom-autoload 'codex-ide-cli-path " contents))
               (should (string-match-p "(autoload 'codex-ide " contents))
               (should (string-match-p "(autoload 'codex-ide-menu " contents))
-              (should (string-match-p "(autoload 'codex-ide-bridge-enable "
+              (should (string-match-p "(autoload 'codex-ide-mcp-bridge-enable "
                                       contents)))))
       (delete-directory temp-dir t))))
 

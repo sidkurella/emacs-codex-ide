@@ -116,79 +116,79 @@ Toggle the most recently used Codex window globally." t)
 (register-definition-prefixes "codex-ide" '("codex-ide-" "make-codex-ide-session"))
 
 
-;;; Generated autoloads from codex-ide-bridge.el
+;;; Generated autoloads from codex-ide-mcp-bridge.el
 
 (defvar codex-ide-enable-emacs-tool-bridge nil "\
 Whether codex-ide should expose Emacs tools to Codex via MCP.
 
 When non-nil, codex-ide starts an MCP bridge server alongside `codex app-server'
 and ensures the current Emacs instance is reachable via `emacsclient'.")
-(custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-tool-bridge-name "emacs" "\
 Name used when registering the Emacs MCP bridge with Codex.")
-(custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-python-command "python3" "\
 Python executable used to launch the standalone Emacs MCP bridge.")
-(custom-autoload 'codex-ide-emacs-bridge-python-command "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-bridge-python-command "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-emacsclient-command "emacsclient" "\
 Path to the `emacsclient' executable used by the bridge.")
-(custom-autoload 'codex-ide-emacs-bridge-emacsclient-command "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-bridge-emacsclient-command "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-script-path nil "\
 Path to the standalone Emacs MCP bridge script.
 
 When nil, codex-ide uses `bin/codex-ide-mcp-server.py' from the package directory.")
-(custom-autoload 'codex-ide-emacs-bridge-script-path "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-bridge-script-path "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-server-name nil "\
 Server name the bridge should use with `emacsclient'.
 
 When nil, use the current value of `server-name'.")
-(custom-autoload 'codex-ide-emacs-bridge-server-name "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-bridge-server-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-suppress-server-start-prompts nil "\
 When non-nil, start the Emacs server for the bridge without prompting.
 
-This only affects explicit calls to `codex-ide-bridge-ensure-server'.  Session
+This only affects explicit calls to `codex-ide-mcp-bridge-ensure-server'.  Session
 startup now prompts once about enabling the Emacs tool bridge, and enabling the
 bridge starts the Emacs server automatically when needed.")
-(custom-autoload 'codex-ide-suppress-server-start-prompts "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-suppress-server-start-prompts "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-startup-timeout 10 "\
 Startup timeout in seconds for the Emacs MCP bridge.")
-(custom-autoload 'codex-ide-emacs-bridge-startup-timeout "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-bridge-startup-timeout "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-tool-timeout 60 "\
 Tool-call timeout in seconds for the Emacs MCP bridge.")
-(custom-autoload 'codex-ide-emacs-bridge-tool-timeout "codex-ide-bridge" t)
+(custom-autoload 'codex-ide-emacs-bridge-tool-timeout "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-require-approval nil "\
 Whether Emacs MCP bridge tool calls should require user approval.
 
 When nil, `codex-ide' auto-accepts approval requests and approval-like MCP
 elicitations that clearly refer to the configured Emacs MCP bridge server or
 one of its tools.")
-(custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-bridge" t)
-(autoload 'codex-ide-bridge-request-exempt-from-approval-p "codex-ide-bridge" "\
+(custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-mcp-bridge" t)
+(autoload 'codex-ide-mcp-bridge-request-exempt-from-approval-p "codex-ide-mcp-bridge" "\
 Return non-nil when PARAMS describe an Emacs MCP bridge request.
 
 This is used to bypass user confirmation for bridge-originated approval
 requests when `codex-ide-emacs-bridge-require-approval' is nil.
 
 (fn PARAMS)")
-(autoload 'codex-ide-bridge-enabled-p "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-enabled-p "codex-ide-mcp-bridge" "\
 Return non-nil when the Emacs MCP bridge should be enabled.")
-(autoload 'codex-ide-bridge-enable "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" "\
 Enable the Emacs MCP bridge and ensure the target Emacs server is running.")
-(autoload 'codex-ide-bridge-disable "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" "\
 Disable the Emacs MCP bridge.")
-(autoload 'codex-ide-bridge-prompt-to-enable "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-prompt-to-enable "codex-ide-mcp-bridge" "\
 Prompt once to enable the Emacs MCP bridge for session startup.")
-(autoload 'codex-ide-bridge-status "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-status "codex-ide-mcp-bridge" "\
 Return an alist describing the current Emacs bridge configuration.")
-(autoload 'codex-ide-bridge-ensure-server "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-ensure-server "codex-ide-mcp-bridge" "\
 Ensure the target Emacs server for the bridge is running.")
-(autoload 'codex-ide-bridge-mcp-config-args "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge-mcp-config-args "codex-ide-mcp-bridge" "\
 Return `codex app-server' CLI args that register the Emacs MCP bridge.")
-(autoload 'codex-ide-bridge--json-tool-call "codex-ide-bridge" "\
+(autoload 'codex-ide-mcp-bridge--json-tool-call "codex-ide-mcp-bridge" "\
 Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
 
 (fn PAYLOAD)")
-(register-definition-prefixes "codex-ide-bridge" '("codex-ide-bridge--"))
+(register-definition-prefixes "codex-ide-mcp-bridge" '("codex-ide-mcp-bridge--"))
 
 
 ;;; Generated autoloads from codex-ide-transient.el
@@ -211,6 +211,81 @@ Open a small debug/status menu for Codex IDE.
 ;;; Generated autoloads from codex-ide-mcp-elicitation.el
 
 (register-definition-prefixes "codex-ide-mcp-elicitation" '("codex-ide-mcp-elicitation-"))
+
+
+;;; Generated autoloads from codex-ide-mcp-bridge.el
+
+(defvar codex-ide-enable-emacs-tool-bridge nil "\
+Whether codex-ide should expose Emacs tools to Codex via MCP.
+
+When non-nil, codex-ide starts an MCP bridge server alongside `codex app-server'
+and ensures the current Emacs instance is reachable via `emacsclient'.")
+(custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-tool-bridge-name "emacs" "\
+Name used when registering the Emacs MCP bridge with Codex.")
+(custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-python-command "python3" "\
+Python executable used to launch the standalone Emacs MCP bridge.")
+(custom-autoload 'codex-ide-emacs-bridge-python-command "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-emacsclient-command "emacsclient" "\
+Path to the `emacsclient' executable used by the bridge.")
+(custom-autoload 'codex-ide-emacs-bridge-emacsclient-command "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-script-path nil "\
+Path to the standalone Emacs MCP bridge script.
+
+When nil, codex-ide uses `bin/codex-ide-mcp-server.py' from the package directory.")
+(custom-autoload 'codex-ide-emacs-bridge-script-path "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-server-name nil "\
+Server name the bridge should use with `emacsclient'.
+
+When nil, use the current value of `server-name'.")
+(custom-autoload 'codex-ide-emacs-bridge-server-name "codex-ide-mcp-bridge" t)
+(defvar codex-ide-suppress-server-start-prompts nil "\
+When non-nil, start the Emacs server for the bridge without prompting.
+
+This only affects explicit calls to `codex-ide-mcp-bridge-ensure-server'.  Session
+startup now prompts once about enabling the Emacs tool bridge, and enabling the
+bridge starts the Emacs server automatically when needed.")
+(custom-autoload 'codex-ide-suppress-server-start-prompts "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-startup-timeout 10 "\
+Startup timeout in seconds for the Emacs MCP bridge.")
+(custom-autoload 'codex-ide-emacs-bridge-startup-timeout "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-tool-timeout 60 "\
+Tool-call timeout in seconds for the Emacs MCP bridge.")
+(custom-autoload 'codex-ide-emacs-bridge-tool-timeout "codex-ide-mcp-bridge" t)
+(defvar codex-ide-emacs-bridge-require-approval nil "\
+Whether Emacs MCP bridge tool calls should require user approval.
+
+When nil, `codex-ide' auto-accepts approval requests and approval-like MCP
+elicitations that clearly refer to the configured Emacs MCP bridge server or
+one of its tools.")
+(custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-mcp-bridge" t)
+(autoload 'codex-ide-mcp-bridge-request-exempt-from-approval-p "codex-ide-mcp-bridge" "\
+Return non-nil when PARAMS describe an Emacs MCP bridge request.
+
+This is used to bypass user confirmation for bridge-originated approval
+requests when `codex-ide-emacs-bridge-require-approval' is nil.
+
+(fn PARAMS)")
+(autoload 'codex-ide-mcp-bridge-enabled-p "codex-ide-mcp-bridge" "\
+Return non-nil when the Emacs MCP bridge should be enabled.")
+(autoload 'codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" "\
+Enable the Emacs MCP bridge and ensure the target Emacs server is running.")
+(autoload 'codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" "\
+Disable the Emacs MCP bridge.")
+(autoload 'codex-ide-mcp-bridge-prompt-to-enable "codex-ide-mcp-bridge" "\
+Prompt once to enable the Emacs MCP bridge for session startup.")
+(autoload 'codex-ide-mcp-bridge-status "codex-ide-mcp-bridge" "\
+Return an alist describing the current Emacs bridge configuration.")
+(autoload 'codex-ide-mcp-bridge-ensure-server "codex-ide-mcp-bridge" "\
+Ensure the target Emacs server for the bridge is running.")
+(autoload 'codex-ide-mcp-bridge-mcp-config-args "codex-ide-mcp-bridge" "\
+Return `codex app-server' CLI args that register the Emacs MCP bridge.")
+(autoload 'codex-ide-mcp-bridge--json-tool-call "codex-ide-mcp-bridge" "\
+Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
+
+(fn PAYLOAD)")
+(register-definition-prefixes "codex-ide-mcp-bridge" '("codex-ide-mcp-bridge--"))
 
 ;;; End of scraped data
 
