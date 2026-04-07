@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'seq)
 (require 'server)
 (require 'subr-x)
 
@@ -223,6 +224,99 @@ Errors from `server-running-p' are treated as nil."
             (line . ,(line-number-at-pos))
             (column . ,(current-column)))))))
 
+(defun codex-ide-bridge--buffer-summary (buffer)
+  "Return a summary alist for BUFFER."
+  (with-current-buffer buffer
+    `((buffer . ,(buffer-name buffer))
+      (file . ,(when-let ((file (buffer-file-name buffer)))
+                 (expand-file-name file)))
+      (major-mode . ,(symbol-name major-mode))
+      (modified . ,(buffer-modified-p buffer))
+      (read-only . ,buffer-read-only))))
+
+(defun codex-ide-bridge--diagnostic-severity (diagnostic)
+  "Return a normalized severity string for DIAGNOSTIC."
+  (cond
+   ((and (fboundp 'flymake-diagnostic-type)
+         (ignore-errors (flymake-diagnostic-type diagnostic)))
+    (pcase (flymake-diagnostic-type diagnostic)
+      ('eglot-note "note")
+      ('eglot-warning "warning")
+      ('eglot-error "error")
+      ('warning "warning")
+      ('error "error")
+      (_ (format "%s" (flymake-diagnostic-type diagnostic)))))
+   ((and (fboundp 'flycheck-error-level)
+         (ignore-errors (flycheck-error-level diagnostic)))
+    (let* ((level (flycheck-error-level diagnostic))
+           (severity (and (fboundp 'flycheck-error-level-severity)
+                          (flycheck-error-level-severity level)))
+           (level-id (or (and (fboundp 'flycheck-error-level-id)
+                              (flycheck-error-level-id level))
+                         level)))
+      (cond
+       ((and severity (<= severity 0)) "error")
+       ((and severity (= severity 1)) "warning")
+       ((symbolp level-id) (symbol-name level-id))
+       (level-id (format "%s" level-id))
+       (t "unknown"))))
+   (t "unknown")))
+
+(defun codex-ide-bridge--flymake-diagnostics ()
+  "Return current Flymake diagnostics as a list of alists."
+  (when (and (boundp 'flymake-mode)
+             flymake-mode
+             (fboundp 'flymake-diagnostics))
+    (mapcar
+     (lambda (diag)
+       `((source . "flymake")
+         (buffer . ,(buffer-name))
+         (file . ,(when-let ((file (buffer-file-name)))
+                    (expand-file-name file)))
+         (message . ,(flymake-diagnostic-text diag))
+         (severity . ,(codex-ide-bridge--diagnostic-severity diag))
+         (line . ,(line-number-at-pos (flymake-diagnostic-beg diag)))
+         (column . ,(save-excursion
+                      (goto-char (flymake-diagnostic-beg diag))
+                      (1+ (current-column))))
+         (end-line . ,(line-number-at-pos (flymake-diagnostic-end diag)))
+         (end-column . ,(save-excursion
+                          (goto-char (flymake-diagnostic-end diag))
+                          (1+ (current-column))))))
+     (flymake-diagnostics))))
+
+(defun codex-ide-bridge--flycheck-diagnostics ()
+  "Return current Flycheck diagnostics as a list of alists."
+  (when (and (boundp 'flycheck-mode)
+             flycheck-mode
+             (boundp 'flycheck-current-errors)
+             flycheck-current-errors)
+    (mapcar
+     (lambda (err)
+       `((source . "flycheck")
+         (buffer . ,(buffer-name))
+         (file . ,(when-let ((file (or (and (fboundp 'flycheck-error-filename)
+                                            (flycheck-error-filename err))
+                                       (buffer-file-name))))
+                    (expand-file-name file)))
+         (message . ,(or (and (fboundp 'flycheck-error-message)
+                              (flycheck-error-message err))
+                         ""))
+         (severity . ,(codex-ide-bridge--diagnostic-severity err))
+         (line . ,(or (and (fboundp 'flycheck-error-line)
+                           (flycheck-error-line err))
+                      1))
+         (column . ,(or (and (fboundp 'flycheck-error-column)
+                             (flycheck-error-column err))
+                        1))
+         (end-line . ,(or (and (fboundp 'flycheck-error-end-line)
+                               (flycheck-error-end-line err))
+                          :json-null))
+         (end-column . ,(or (and (fboundp 'flycheck-error-end-column)
+                                 (flycheck-error-end-column err))
+                            :json-null))))
+     flycheck-current-errors)))
+
 (defun codex-ide-bridge--tool-call (name params)
   "Dispatch bridge tool NAME using PARAMS."
   (let ((handler (intern-soft (format "codex-ide-bridge--tool-call--%s" name))))
@@ -272,25 +366,51 @@ Errors from `server-running-p' are treated as nil."
       (line . ,(line-number-at-pos))
       (column . ,(1+ (current-column))))))
 
-(defun codex-ide-bridge--tool-call--emacs_run_command (params)
-  "Handle an `emacs_run_command' bridge request with PARAMS."
-  (let* ((command-name (alist-get 'command params))
-         (command-symbol (and (stringp command-name)
-                              (intern-soft command-name))))
-    (unless (and command-symbol
-                 (commandp command-symbol))
-      (error "Unknown command: %s" (or command-name "unknown")))
-    (call-interactively command-symbol)
-    `((command . ,command-name)
-      (buffer . ,(buffer-name))
-      (context . ,(or (codex-ide-bridge--current-context) :json-null)))))
+(defun codex-ide-bridge--tool-call--emacs_all_open_files (_params)
+  "Handle an `emacs_all_open_files' bridge request."
+  `((files . ,(seq-filter
+               #'identity
+               (mapcar
+                (lambda (buffer)
+                  (with-current-buffer buffer
+                    (when-let ((file (buffer-file-name buffer)))
+                      `((buffer . ,(buffer-name buffer))
+                        (file . ,(expand-file-name file))
+                        (major-mode . ,(symbol-name major-mode))
+                        (modified . ,(buffer-modified-p buffer))
+                        (read-only . ,buffer-read-only)))))
+                (buffer-list))))))
 
-(defun codex-ide-bridge--tool-call--emacs_eval (params)
-  "Handle an `emacs_eval' bridge request with PARAMS."
-  (let* ((expression (alist-get 'expression params))
-         (form (car (read-from-string expression)))
-         (result (eval form t)))
-    `((value . ,(format "%S" result)))))
+(defun codex-ide-bridge--tool-call--emacs_get_diagnostics (params)
+  "Handle an `emacs_get_diagnostics' bridge request with PARAMS."
+  (let* ((buffer-name (alist-get 'buffer params))
+         (buffer (and (stringp buffer-name)
+                      (get-buffer buffer-name))))
+    (unless buffer
+      (error "Unknown buffer: %s" (or buffer-name "nil")))
+    (with-current-buffer buffer
+      `((buffer . ,(buffer-name buffer))
+        (file . ,(when-let ((file (buffer-file-name buffer)))
+                   (expand-file-name file)))
+        (diagnostics . ,(or (codex-ide-bridge--flymake-diagnostics)
+                            (codex-ide-bridge--flycheck-diagnostics)
+                            '()))))))
+
+(defun codex-ide-bridge--tool-call--emacs_window_list (_params)
+  "Handle an `emacs_window_list' bridge request."
+  (let ((windows
+         (mapcar
+          (lambda (window)
+            (let ((buffer (window-buffer window)))
+              `((window-id . ,(format "%s" window))
+                (selected . ,(eq window (selected-window)))
+                (dedicated . ,(window-dedicated-p window))
+                (point . ,(window-point window))
+                (start . ,(window-start window))
+                (edges . ,(append (window-edges window) nil))
+                (buffer-info . ,(codex-ide-bridge--buffer-summary buffer)))))
+          (window-list (selected-frame) 'no-minibuf (frame-first-window)))))
+    `((windows . ,windows))))
 
 (provide 'codex-ide-bridge)
 

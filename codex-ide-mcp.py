@@ -26,15 +26,6 @@ class EmacsBridgeCommand:
 
 COMMANDS = [
     EmacsBridgeCommand(
-        name="emacs_get_context",
-        description="Read the current Emacs file/buffer context.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
         name="emacs_open_file",
         description="Open a file in Emacs and optionally jump to line and column.",
         inputSchema={
@@ -49,22 +40,30 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="emacs_run_command",
-        description="Run an interactive Emacs command.",
+        name="emacs_all_open_files",
+        description="List all currently open file-backed buffers in Emacs.",
         inputSchema={
             "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
+            "properties": {},
             "additionalProperties": False,
         },
     ),
     EmacsBridgeCommand(
-        name="emacs_eval",
-        description="Evaluate an Emacs Lisp expression in the running Emacs instance.",
+        name="emacs_get_diagnostics",
+        description="Return Flymake or Flycheck diagnostics for a buffer name.",
         inputSchema={
             "type": "object",
-            "properties": {"expression": {"type": "string"}},
-            "required": ["expression"],
+            "properties": {"buffer": {"type": "string"}},
+            "required": ["buffer"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_window_list",
+        description="List visible windows in the selected frame and their buffers.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     ),

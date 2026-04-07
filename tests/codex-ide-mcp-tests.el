@@ -37,8 +37,8 @@
                 '((jsonrpc . "2.0")
                   (id . 1)
                   (method . "tools/call")
-                  (params . ((name . "emacs_get_context")
-                             (arguments . ())))))
+                  (params . ((name . "emacs_open_file")
+                             (arguments . ((path . "/tmp/example.el")))))))
                "\n")))
           (should
            (equal
@@ -92,8 +92,10 @@
             (insert "response = []\n")
             (insert "if 'emacs_open_file' in expr:\n")
             (insert "    response = {'tool': 'emacs_open_file', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
-            (insert "elif 'emacs_eval' in expr:\n")
-            (insert "    response = {'value': '42'}\n")
+            (insert "elif 'emacs_all_open_files' in expr:\n")
+            (insert "    response = {'files': [{'buffer': 'example.el', 'file': '/tmp/example.el'}]}\n")
+            (insert "elif 'emacs_get_diagnostics' in expr:\n")
+            (insert "    response = {'buffer': 'example.el', 'diagnostics': [{'severity': 'error', 'message': 'Boom'}]}\n")
             (insert "print(json.dumps(response, separators=(',', ':')))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
@@ -111,8 +113,11 @@
                                                  (line . 9)
                                                  (column . 2))))))
                       `((jsonrpc . "2.0") (id . 4) (method . "tools/call")
-                        (params . ((name . "emacs_eval")
-                                   (arguments . ((expression . "(+ 40 2)"))))))))
+                        (params . ((name . "emacs_all_open_files")
+                                   (arguments . ()))))
+                      `((jsonrpc . "2.0") (id . 5) (method . "tools/call")
+                        (params . ((name . "emacs_get_diagnostics")
+                                   (arguments . ((buffer . "example.el"))))))))
               (let ((json-object-type 'alist)
                     (json-array-type 'list)
                     (json-key-type 'string))
@@ -149,7 +154,7 @@
                           responses)))
                 (forward-line 1))
               (setq responses (nreverse responses))
-              (should (= (length responses) 4))
+              (should (= (length responses) 5))
               (should
                (equal (alist-get "protocolVersion"
                                  (alist-get "result" (nth 0 responses) nil nil #'equal)
@@ -163,25 +168,33 @@
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))
                                 tools)
-                        '("emacs_get_context"
-                          "emacs_open_file"
-                          "emacs_run_command"
-                          "emacs_eval"))))
+                        '("emacs_open_file"
+                          "emacs_all_open_files"
+                          "emacs_get_diagnostics"
+                          "emacs_window_list"))))
               (let* ((open-file-text
                       (alist-get "text"
                                  (car (alist-get "content"
                                                  (alist-get "result" (nth 2 responses) nil nil #'equal)
                                                  nil nil #'equal))
                                  nil nil #'equal))
-                     (eval-text
+                     (open-files-text
                       (alist-get "text"
                                  (car (alist-get "content"
                                                  (alist-get "result" (nth 3 responses) nil nil #'equal)
                                                  nil nil #'equal))
+                                 nil nil #'equal))
+                     (diagnostics-text
+                      (alist-get "text"
+                                 (car (alist-get "content"
+                                                 (alist-get "result" (nth 4 responses) nil nil #'equal)
+                                                 nil nil #'equal))
                                  nil nil #'equal)))
                 (should (string-match-p "\"tool\": \"emacs_open_file\"" open-file-text))
                 (should (string-match-p "\"path\": \"/tmp/example.el\"" open-file-text))
-                (should (string-match-p "\"value\": \"42\"" eval-text))))))
+                (should (string-match-p "\"files\"" open-files-text))
+                (should (string-match-p "\"diagnostics\"" diagnostics-text))
+                (should (string-match-p "\"Boom\"" diagnostics-text))))))
       (when (file-exists-p mock-emacsclient)
         (delete-file mock-emacsclient))
       (kill-buffer input-buffer)
