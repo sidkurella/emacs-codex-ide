@@ -103,7 +103,8 @@ one of its tools."
     "get_window_list"
     "ensure_file_buffer_open"
     "view_file_buffer"
-    "kill_file_buffer")
+    "kill_file_buffer"
+    "lisp_check_parens")
   "Tool names exposed by the Emacs MCP bridge.")
 
 (defun codex-ide-mcp-bridge--toml-string (value)
@@ -488,6 +489,35 @@ Errors from `server-running-p' are treated as nil."
         `((path . ,expanded-path)
           (buffer . ,(buffer-name buffer))
           (killed . ,(if killed t :json-false)))))))
+
+(defun codex-ide-mcp-bridge--tool-call--lisp_check_parens (params)
+  "Handle a `lisp_check_parens' bridge request with PARAMS."
+  (let ((path (alist-get 'path params)))
+    (unless (and (stringp path) (not (string-empty-p path)))
+      (error "Missing file path"))
+    (setq path (expand-file-name path))
+    (with-current-buffer (codex-ide-mcp-bridge--resolve-file-buffer path)
+      (save-mark-and-excursion
+        (save-restriction
+          (widen)
+          (let ((inhibit-message t))
+            (condition-case err
+                (progn
+                  (check-parens)
+                  `((path . ,path)
+                    (balanced . t)
+                    (mismatch . :json-false)))
+              (user-error
+               (let ((mismatch-point (point)))
+                 `((path . ,path)
+                   (balanced . :json-false)
+                   (mismatch . t)
+                   (point . ,mismatch-point)
+                   (line . ,(line-number-at-pos mismatch-point))
+                   (column . ,(save-excursion
+                                (goto-char mismatch-point)
+                                (1+ (current-column))))
+                   (message . ,(error-message-string err))))))))))))
 
 (defun codex-ide-mcp-bridge--tool-call--get_all_open_file_buffers (_params)
   "Handle a `get_all_open_file_buffers' bridge request."

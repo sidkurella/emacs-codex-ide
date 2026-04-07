@@ -87,6 +87,16 @@ COMMANDS = [
             "additionalProperties": False,
         },
     ),
+    EmacsBridgeCommand(
+        name="lisp_check_parens",
+        description="Check a Lisp source file for mismatched parentheses and report the mismatch location when found.",
+        inputSchema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    ),
 ]
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
 

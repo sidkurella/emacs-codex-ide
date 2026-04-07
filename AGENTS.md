@@ -30,6 +30,7 @@ Design expectations:
 - Favor built-in libraries and simple data structures over framework-style abstractions.
 - Keep bridge functionality optional and conservative by default.
 - After making changes, note that files can be reloaded into the running Emacs session through the Emacs bridge, but only do so if the user explicitly requests it.
+- After all non-trivial file changes run the `emacs/lisp_check_parens` to ensure no mismatched parens.
 - Run existing tests after changes and add or update tests when behavior changes.
 - Never commit code unless the user explicitly asks for a commit.
 

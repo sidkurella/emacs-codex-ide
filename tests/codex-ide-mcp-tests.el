@@ -94,6 +94,8 @@
             (insert "    response = {'files': [{'buffer': 'example.el', 'file': '/tmp/example.el'}]}\n")
             (insert "elif 'get_diagnostics' in expr:\n")
             (insert "    response = {'buffer': 'example.el', 'diagnostics': [{'severity': 'error', 'message': 'Boom'}]}\n")
+            (insert "elif 'lisp_check_parens' in expr:\n")
+            (insert "    response = {'path': '/tmp/example.el', 'balanced': False, 'mismatch': True, 'line': 9, 'column': 2, 'point': 123}\n")
             (insert "print(json.dumps(json.dumps(response, separators=(',', ':'))))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
@@ -115,7 +117,10 @@
                                    (arguments . ()))))
                       `((jsonrpc . "2.0") (id . 5) (method . "tools/call")
                         (params . ((name . "get_diagnostics")
-                                   (arguments . ((buffer . "example.el"))))))))
+                                   (arguments . ((buffer . "example.el"))))))
+                      `((jsonrpc . "2.0") (id . 6) (method . "tools/call")
+                        (params . ((name . "lisp_check_parens")
+                                   (arguments . ((path . "/tmp/example.el"))))))))
               (let ((json-object-type 'alist)
                     (json-array-type 'list)
                     (json-key-type 'string))
@@ -152,7 +157,7 @@
                           responses)))
                 (forward-line 1))
               (setq responses (nreverse responses))
-              (should (= (length responses) 5))
+              (should (= (length responses) 6))
               (should
                (equal (alist-get "protocolVersion"
                                  (alist-get "result" (nth 0 responses) nil nil #'equal)
@@ -161,7 +166,7 @@
               (let ((tools (alist-get "tools"
                                       (alist-get "result" (nth 1 responses) nil nil #'equal)
                                       nil nil #'equal)))
-                (should (= (length tools) 6))
+                (should (= (length tools) 7))
                 (should
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))
@@ -171,7 +176,8 @@
                           "get_window_list"
                           "ensure_file_buffer_open"
                           "view_file_buffer"
-                          "kill_file_buffer"))))
+                          "kill_file_buffer"
+                          "lisp_check_parens"))))
               (let* ((open-file-text
                       (alist-get "text"
                                  (car (alist-get "content"
@@ -189,12 +195,20 @@
                                  (car (alist-get "content"
                                                  (alist-get "result" (nth 4 responses) nil nil #'equal)
                                                  nil nil #'equal))
+                                 nil nil #'equal))
+                     (parens-text
+                      (alist-get "text"
+                                 (car (alist-get "content"
+                                                 (alist-get "result" (nth 5 responses) nil nil #'equal)
+                                                 nil nil #'equal))
                                  nil nil #'equal)))
                 (should (string-match-p "\"tool\": \"view_file_buffer\"" open-file-text))
                 (should (string-match-p "\"path\": \"/tmp/example.el\"" open-file-text))
                 (should (string-match-p "\"files\"" open-files-text))
                 (should (string-match-p "\"diagnostics\"" diagnostics-text))
-                (should (string-match-p "\"Boom\"" diagnostics-text))))))
+                (should (string-match-p "\"Boom\"" diagnostics-text))
+                (should (string-match-p "\"balanced\": false" parens-text))
+                (should (string-match-p "\"point\": 123" parens-text))))))
       (when (file-exists-p mock-emacsclient)
         (delete-file mock-emacsclient))
       (kill-buffer input-buffer)

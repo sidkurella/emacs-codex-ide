@@ -226,6 +226,55 @@
         (should (equal (alist-get 'buffer result) (buffer-name buffer)))
         (should (alist-get 'killed result))))))
 
+(ert-deftest codex-ide-mcp-bridge-lisp-check-parens-returns-success-when-balanced ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir
+                     "balanced.el"
+                     "(defun balanced ()\n  (list 1 2 3))\n")))
+    (codex-ide-test-with-fixture project-dir
+      (let ((result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
+                     `((path . ,file-path)))))
+        (should (equal (alist-get 'path result) file-path))
+        (should (alist-get 'balanced result))
+        (should-not (eq (alist-get 'mismatch result) t))
+        (should-not (alist-get 'line result))
+        (should-not (alist-get 'column result))))))
+
+(ert-deftest codex-ide-mcp-bridge-lisp-check-parens-reports-mismatch-location ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (contents "(defun broken ()\n  (list 1 2 3]\n")
+         (file-path (codex-ide-test--make-project-file project-dir "broken.el" contents)))
+    (codex-ide-test-with-fixture project-dir
+      (let ((result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
+                     `((path . ,file-path)))))
+        (should-not (eq (alist-get 'balanced result) t))
+        (should (alist-get 'mismatch result))
+        (should (= (alist-get 'line result) 1))
+        (should (= (alist-get 'column result) 1))
+        (should (= (alist-get 'point result) 1))
+        (should (equal (alist-get 'message result) "Unmatched bracket or quote"))))))
+
+(ert-deftest codex-ide-mcp-bridge-lisp-check-parens-uses-live-buffer-contents ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir
+                     "live.el"
+                     "(defun live ()\n  (list 1 2 3))\n")))
+    (codex-ide-test-with-fixture project-dir
+      (let ((buffer (find-file-noselect file-path)))
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (delete-char -2)
+          (set-buffer-modified-p t))
+        (let ((result (codex-ide-mcp-bridge--tool-call--lisp_check_parens
+                       `((path . ,file-path)))))
+          (should-not (eq (alist-get 'balanced result) t))
+          (should (alist-get 'mismatch result))
+          (should (= (alist-get 'line result) 1))
+          (should (= (alist-get 'column result) 1))
+          (should (= (alist-get 'point result) 1)))))))
+
 (ert-deftest codex-ide-mcp-bridge-get-diagnostics-returns-empty-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (buffer (get-buffer-create " *codex-ide-diagnostics-none*")))
