@@ -98,6 +98,7 @@ one of its tools."
 
 (defconst codex-ide-mcp-bridge--tool-names
   '("get_all_open_file_buffers"
+    "get_buffer_info"
     "get_diagnostics"
     "get_window_list"
     "ensure_file_buffer_open"
@@ -278,20 +279,8 @@ Errors from `server-running-p' are treated as nil."
                          prefix
                          codex-ide-emacs-bridge-tool-timeout)))))
 
-(defun codex-ide-mcp-bridge--current-context ()
-  "Return the current Emacs buffer context as an alist."
-  (or (and (fboundp 'codex-ide--make-buffer-context)
-           (codex-ide--make-buffer-context (current-buffer)))
-      (let ((file (buffer-file-name)))
-        (when file
-          `((file . ,(expand-file-name file))
-            (display-file . ,(file-name-nondirectory file))
-            (buffer-name . ,(buffer-name))
-            (line . ,(line-number-at-pos))
-            (column . ,(current-column)))))))
-
-(defun codex-ide-mcp-bridge--buffer-summary (buffer)
-  "Return a summary alist for BUFFER."
+(defun codex-ide-mcp-bridge--buffer-info (buffer)
+  "Return a buffer-info alist for BUFFER."
   (with-current-buffer buffer
     `((buffer . ,(buffer-name buffer))
       (file . ,(when-let ((file (buffer-file-name buffer)))
@@ -408,11 +397,6 @@ Errors from `server-running-p' are treated as nil."
 
 ;; These functions are the Elisp implementations of the MCP bridge commands.
 
-(defun codex-ide-mcp-bridge--tool-call--get_context (_params)
-  "Handle a `get_context' bridge request."
-  (or (codex-ide-mcp-bridge--current-context)
-      '((context . :json-null))))
-
 (defun codex-ide-mcp-bridge--resolve-file-buffer (path)
   "Return the buffer visiting PATH, opening it if needed."
   (find-file-noselect (expand-file-name path)))
@@ -511,14 +495,18 @@ Errors from `server-running-p' are treated as nil."
                #'identity
                (mapcar
                 (lambda (buffer)
-                  (with-current-buffer buffer
-                    (when-let ((file (buffer-file-name buffer)))
-                      `((buffer . ,(buffer-name buffer))
-                        (file . ,(expand-file-name file))
-                        (major-mode . ,(symbol-name major-mode))
-                        (modified . ,(buffer-modified-p buffer))
-                        (read-only . ,buffer-read-only)))))
+                  (when (buffer-file-name buffer)
+                    (codex-ide-mcp-bridge--buffer-info buffer)))
                 (buffer-list))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_buffer_info (params)
+  "Handle a `get_buffer_info' bridge request with PARAMS."
+  (let* ((buffer-name (alist-get 'buffer params))
+         (buffer (and (stringp buffer-name)
+                      (get-buffer buffer-name))))
+    (unless buffer
+      (error "Unknown buffer: %s" (or buffer-name "nil")))
+    (codex-ide-mcp-bridge--buffer-info buffer)))
 
 (defun codex-ide-mcp-bridge--tool-call--get_diagnostics (params)
   "Handle a `get_diagnostics' bridge request with PARAMS."
@@ -547,7 +535,7 @@ Errors from `server-running-p' are treated as nil."
                 (point . ,(window-point window))
                 (start . ,(window-start window))
                 (edges . ,(append (window-edges window) nil))
-                (buffer-info . ,(codex-ide-mcp-bridge--buffer-summary buffer)))))
+                (buffer-info . ,(codex-ide-mcp-bridge--buffer-info buffer)))))
           (window-list (selected-frame) 'no-minibuf (frame-first-window)))))
     `((windows . ,windows))))
 

@@ -394,6 +394,47 @@
               "{\"name\":\"test_tool\",\"params\":{\"value\":7}}")
              "{\"ok\":true,\"value\":7}"))))
 
+(ert-deftest codex-ide-mcp-bridge-get-buffer-info-returns-shared-buffer-shape ()
+  (let ((buffer (generate-new-buffer " *codex-ide-mcp-bridge-info*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (emacs-lisp-mode)
+          (set-buffer-modified-p t)
+          (setq buffer-read-only t)
+          (should
+           (equal
+            (codex-ide-mcp-bridge--tool-call--get_buffer_info
+             `((buffer . ,(buffer-name buffer))))
+            `((buffer . ,(buffer-name buffer))
+              (file . nil)
+              (major-mode . "emacs-lisp-mode")
+              (modified . t)
+              (read-only . t)))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-mcp-bridge-get-all-open-file-buffers-uses-shared-buffer-info ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "lib/buffer-info.el" "(message \"hi\")\n"))
+         (buffer (find-file-noselect file-path)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (emacs-lisp-mode)
+          (set-buffer-modified-p t)
+          (let* ((result (codex-ide-mcp-bridge--tool-call--get_all_open_file_buffers nil))
+                 (files (alist-get 'files result nil nil #'equal))
+                 (entry (seq-find
+                         (lambda (item)
+                           (equal (alist-get 'buffer item nil nil #'equal)
+                                  (buffer-name buffer)))
+                         files)))
+            (should entry)
+            (should
+             (equal entry
+                    (codex-ide-mcp-bridge--tool-call--get_buffer_info
+                     `((buffer . ,(buffer-name buffer))))))))
+      (kill-buffer buffer))))
+
 (ert-deftest codex-ide-send-active-buffer-context-submits-formatted-context ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
