@@ -112,7 +112,7 @@ class EmacsProxy:
 
     def _tool_call_expression(self, name: str, params: dict[str, Any]) -> str:
         payload = json.dumps({"name": name, "params": params}, separators=(",", ":"), ensure_ascii=True)
-        return f"(princ (codex-ide-bridge--json-tool-call {self._elisp_string(payload)}))"
+        return f"(codex-ide-bridge--json-tool-call {self._elisp_string(payload)})"
 
     def call_tool(self, name: str, params: dict[str, Any] | None = None) -> Any:
         params = params or {}
@@ -134,7 +134,13 @@ class EmacsProxy:
             stderr = completed.stderr.strip() or completed.stdout.strip() or "emacsclient failed"
             raise RuntimeError(stderr)
         try:
-            return json.loads(completed.stdout)
+            # Explanation for double decoding: the elisp output is a quoted Elisp string
+            # of a JSON value. So we need to decode once to remove the outer quotes to
+            # get the actual JSON string then again to convert it to a python object.
+            decoded = json.loads(completed.stdout)
+            if isinstance(decoded, str):
+                return json.loads(decoded)
+            return decoded
         except (ValueError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"invalid bridge response: {exc}") from exc
 

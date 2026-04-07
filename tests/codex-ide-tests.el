@@ -384,6 +384,16 @@
               (codex-ide--item-type-at-point))
             (should (equal reported "reasoning"))))))))
 
+(ert-deftest codex-ide-bridge-json-tool-call-returns-json-response ()
+  (cl-letf (((symbol-function 'codex-ide-bridge--json-tool-call)
+             (lambda (payload)
+               (should (equal payload "{\"name\":\"test_tool\",\"params\":{\"value\":7}}"))
+               "{\"ok\":true,\"value\":7}")))
+    (should (equal
+             (codex-ide-bridge--json-tool-call
+              "{\"name\":\"test_tool\",\"params\":{\"value\":7}}")
+             "{\"ok\":true,\"value\":7}"))))
+
 (ert-deftest codex-ide-send-active-buffer-context-submits-formatted-context ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file

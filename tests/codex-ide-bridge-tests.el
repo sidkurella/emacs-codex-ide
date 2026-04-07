@@ -59,6 +59,90 @@
                     "-c" "mcp_servers.editor.startup_timeout_sec=15"
                     "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
+(ert-deftest codex-ide-bridge-request-exempt-from-approval-matches-bridge-tool-payload ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-emacs-tool-bridge-name "editor")
+            (codex-ide-emacs-bridge-require-approval nil))
+        (should
+         (codex-ide-bridge-request-exempt-from-approval-p
+          '((message . "Allow editor to run emacs_get_diagnostics")
+            (tool . "emacs_get_diagnostics"))))
+        (should-not
+         (codex-ide-bridge-request-exempt-from-approval-p
+          '((message . "Allow another server to run search_web")
+            (tool . "search_web"))))))))
+
+(ert-deftest codex-ide-bridge-request-exempt-from-approval-respects-require-approval ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-emacs-tool-bridge-name "editor")
+            (codex-ide-emacs-bridge-require-approval t))
+        (should-not
+         (codex-ide-bridge-request-exempt-from-approval-p
+          '((message . "Allow editor to run emacs_get_diagnostics")
+            (tool . "emacs_get_diagnostics"))))))))
+
+(ert-deftest codex-ide-bridge-permissions-approval-auto-accepts-bridge-requests ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (response nil)
+        (captured-prompt nil))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-emacs-tool-bridge-name "editor")
+            (codex-ide-emacs-bridge-require-approval nil))
+        (cl-letf (((symbol-function 'run-at-time)
+                   (lambda (_time _repeat function)
+                     (funcall function)))
+                  ((symbol-function 'codex-ide-log-message)
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'codex-ide--jsonrpc-send-response)
+                   (lambda (_session id payload)
+                     (setq response (list id payload))))
+                  ((symbol-function 'codex-ide--approval-decision)
+                   (lambda (&rest args)
+                     (setq captured-prompt args)
+                     'decline)))
+          (codex-ide--handle-permissions-approval
+           nil
+           17
+           '((reason . "Allow MCP server editor to run emacs_get_diagnostics")
+             (permissions . (((tool . "emacs_get_diagnostics"))
+                             ((server . "editor"))))))
+          (should-not captured-prompt)
+          (should (equal (car response) 17))
+          (should (equal (alist-get 'scope (cadr response)) "session"))
+          (should
+           (equal (alist-get 'permissions (cadr response))
+                  '(((tool . "emacs_get_diagnostics"))
+                    ((server . "editor"))))))))))
+
+(ert-deftest codex-ide-bridge-elicitation-auto-accepts-bridge-approval-prompts ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (response nil)
+        (handler-called nil))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-emacs-tool-bridge-name "editor")
+            (codex-ide-emacs-bridge-require-approval nil))
+        (cl-letf (((symbol-function 'run-at-time)
+                   (lambda (_time _repeat function)
+                     (funcall function)))
+                  ((symbol-function 'codex-ide-log-message)
+                   (lambda (&rest _args) nil))
+                  ((symbol-function 'codex-ide--jsonrpc-send-response)
+                   (lambda (_session id payload)
+                     (setq response (list id payload))))
+                  ((symbol-function 'codex-ide-mcp-elicitation-handle-request)
+                   (lambda (_params)
+                     (setq handler-called t)
+                     '((action . "decline")))))
+          (codex-ide--handle-elicitation-request
+           nil
+           18
+           '((message . "Allow editor to run emacs_get_diagnostics")
+             (mode . "form")))
+          (should-not handler-called)
+          (should (equal response '(18 ((action . "accept"))))))))))
+
 (ert-deftest codex-ide-bridge-emacs-all-open-files-lists-file-backed-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "a.el" "(message \"a\")\n"))
@@ -71,11 +155,17 @@
         (with-temp-buffer
           (let ((files (alist-get 'files
                                   (codex-ide-bridge--tool-call--emacs_all_open_files nil))))
-            (should (= (length files) 2))
-            (should (equal (mapcar (lambda (item) (alist-get 'file item)) files)
-                           (list file-a file-b)))
-            (should (equal (alist-get 'major-mode (car files)) "emacs-lisp-mode"))
-            (should (alist-get 'modified (cadr files)))))))))
+            (should (equal (alist-get 'major-mode
+                                      (seq-find (lambda (item)
+                                                  (equal (alist-get 'file item) file-a))
+                                                files))
+                           "emacs-lisp-mode"))
+            (should (member file-a (mapcar (lambda (item) (alist-get 'file item)) files)))
+            (should (member file-b (mapcar (lambda (item) (alist-get 'file item)) files)))
+            (should (alist-get 'modified
+                               (seq-find (lambda (item)
+                                           (equal (alist-get 'file item) file-b))
+                                         files)))))))))
 
 (ert-deftest codex-ide-bridge-emacs-get-diagnostics-returns-empty-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))

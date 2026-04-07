@@ -156,6 +156,20 @@ Startup timeout in seconds for the Emacs MCP bridge.")
 (defvar codex-ide-emacs-bridge-tool-timeout 60 "\
 Tool-call timeout in seconds for the Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-tool-timeout "codex-ide-bridge" t)
+(defvar codex-ide-emacs-bridge-require-approval nil "\
+Whether Emacs MCP bridge tool calls should require user approval.
+
+When nil, `codex-ide' auto-accepts approval requests and approval-like MCP
+elicitations that clearly refer to the configured Emacs MCP bridge server or
+one of its tools.")
+(custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-bridge" t)
+(autoload 'codex-ide-bridge-request-exempt-from-approval-p "codex-ide-bridge" "\
+Return non-nil when PARAMS describe an Emacs MCP bridge request.
+
+This is used to bypass user confirmation for bridge-originated approval
+requests when `codex-ide-emacs-bridge-require-approval' is nil.
+
+(fn PARAMS)")
 (autoload 'codex-ide-bridge-enabled-p "codex-ide-bridge" "\
 Return non-nil when the Emacs MCP bridge should be enabled.")
 (autoload 'codex-ide-bridge-enable "codex-ide-bridge" "\
@@ -193,6 +207,10 @@ Open a small debug/status menu for Codex IDE.
 (fn)" t)
 (register-definition-prefixes "codex-ide-transient" '("codex-ide--"))
 
+
+;;; Generated autoloads from codex-ide-mcp-elicitation.el
+
+(register-definition-prefixes "codex-ide-mcp-elicitation" '("codex-ide-mcp-elicitation-"))
 
 ;;; End of scraped data
 

@@ -40,6 +40,7 @@
 (defvar codex-ide-window-width)
 (defvar codex-ide-window-height)
 (defvar codex-ide-enable-emacs-tool-bridge)
+(defvar codex-ide-emacs-bridge-require-approval)
 
 (defun codex-ide--has-active-session-p ()
   "Return non-nil if the current project has an active Codex session."
@@ -198,6 +199,16 @@
   (message "Emacs callback bridge %s"
            (if codex-ide-enable-emacs-tool-bridge "enabled" "disabled")))
 
+(transient-define-suffix codex-ide--toggle-emacs-bridge-approval ()
+  "Toggle `codex-ide-emacs-bridge-require-approval'."
+  (interactive)
+  (setq codex-ide-emacs-bridge-require-approval
+        (not codex-ide-emacs-bridge-require-approval))
+  (message "Emacs bridge approvals %s"
+           (if codex-ide-emacs-bridge-require-approval
+               "enabled"
+             "disabled")))
+
 (defun codex-ide--save-config ()
   "Persist current Codex settings with Customize."
   (interactive)
@@ -214,6 +225,8 @@
   (customize-save-variable 'codex-ide-window-height codex-ide-window-height)
   (customize-save-variable 'codex-ide-enable-emacs-tool-bridge
                            codex-ide-enable-emacs-tool-bridge)
+  (customize-save-variable 'codex-ide-emacs-bridge-require-approval
+                           codex-ide-emacs-bridge-require-approval)
   (message "Codex IDE configuration saved"))
 
 ;;;###autoload
@@ -267,7 +280,13 @@
     ("e" "Toggle Emacs callback bridge" codex-ide--toggle-emacs-tool-bridge
      :description (lambda ()
                      (format "Emacs callback bridge (%s)"
-                             (if codex-ide-enable-emacs-tool-bridge "ON" "OFF"))))]]
+                             (if codex-ide-enable-emacs-tool-bridge "ON" "OFF"))))
+    ("A" "Toggle bridge approvals" codex-ide--toggle-emacs-bridge-approval
+     :description (lambda ()
+                     (format "Bridge approvals (%s)"
+                             (if codex-ide-emacs-bridge-require-approval
+                                 "ON"
+                               "OFF"))))]]
   ["Save"
    ("V" "Save configuration" codex-ide--save-config)])
 

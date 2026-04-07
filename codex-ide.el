@@ -25,6 +25,7 @@
 (require 'json)
 (require 'project)
 (require 'subr-x)
+(require 'codex-ide-mcp-elicitation)
 (require 'codex-ide-transient)
 
 ;;;###autoload
@@ -2230,7 +2231,8 @@ The result is an alist with `formatted' and `summary' entries."
    "initialize"
    `((clientInfo . ((name . "emacs")
                     (version . "0.2.0")))
-     (capabilities . ((experimentalApi . t)))))
+     (capabilities . ((experimentalApi . t)
+                      ,@(codex-ide-mcp-elicitation-capabilities)))))
   (setf (codex-ide-session-status session) "idle")
   (codex-ide-log-message session "Initialization complete")
   (codex-ide--update-header-line session))
@@ -2411,6 +2413,11 @@ MODE can be nil or `new', `continue', or `resume'."
 CHOICES is an alist of labels to returned values."
   (cdr (assoc (completing-read prompt choices nil t) choices)))
 
+(defun codex-ide--auto-approve-emacs-bridge-request-p (params)
+  "Return non-nil when PARAMS should bypass user approval for the Emacs bridge."
+  (and (fboundp 'codex-ide-bridge-request-exempt-from-approval-p)
+       (codex-ide-bridge-request-exempt-from-approval-p params)))
+
 (defun codex-ide--format-command-approval-prompt (command params)
   "Build a command approval prompt for COMMAND using PARAMS."
   (let ((reason (alist-get 'reason params))
@@ -2447,9 +2454,11 @@ CHOICES is an alist of labels to returned values."
    0 nil
    (lambda ()
      (let* ((command (or (alist-get 'command params) "unknown command"))
-            (decision (codex-ide--approval-decision
-                       (codex-ide--format-command-approval-prompt command params)
-                       (codex-ide--command-approval-choices params))))
+            (decision (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+                          "acceptForSession"
+                        (codex-ide--approval-decision
+                         (codex-ide--format-command-approval-prompt command params)
+                         (codex-ide--command-approval-choices params)))))
        (codex-ide-log-message
         session
         "Command approval for %s resolved as %s"
@@ -2464,12 +2473,14 @@ CHOICES is an alist of labels to returned values."
    0 nil
    (lambda ()
      (let* ((reason (or (alist-get 'reason params) "approve file changes"))
-            (decision (codex-ide--approval-decision
-                       (format "Codex file-change approval: %s " reason)
-                       '(("accept" . "accept")
-                         ("accept for session" . "acceptForSession")
-                         ("decline" . "decline")
-                         ("cancel turn" . "cancel")))))
+            (decision (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+                          "acceptForSession"
+                        (codex-ide--approval-decision
+                         (format "Codex file-change approval: %s " reason)
+                         '(("accept" . "accept")
+                           ("accept for session" . "acceptForSession")
+                           ("decline" . "decline")
+                           ("cancel turn" . "cancel"))))))
        (codex-ide-log-message
         session
         "File-change approval for %s resolved as %s"
@@ -2484,14 +2495,16 @@ CHOICES is an alist of labels to returned values."
    0 nil
    (lambda ()
      (let* ((permissions (or (alist-get 'permissions params) '()))
-            (choice (codex-ide--approval-decision
-                     (format "Grant Codex permissions%s? "
-                             (if-let ((reason (alist-get 'reason params)))
-                                 (format " (%s)" reason)
-                               ""))
-                     '(("grant for turn" . turn)
-                       ("grant for session" . session)
-                       ("decline" . decline)))))
+            (choice (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+                        'session
+                      (codex-ide--approval-decision
+                       (format "Grant Codex permissions%s? "
+                               (if-let ((reason (alist-get 'reason params)))
+                                   (format " (%s)" reason)
+                                 ""))
+                       '(("grant for turn" . turn)
+                         ("grant for session" . session)
+                         ("decline" . decline))))))
        (codex-ide-log-message
         session
         "Permissions approval resolved as %s for %S"
@@ -2504,6 +2517,29 @@ CHOICES is an alist of labels to returned values."
           `((permissions . ,permissions)
             (scope . ,(symbol-name choice)))))))))
 
+(defun codex-ide--handle-elicitation-request (&optional session id params)
+  "Handle an MCP elicitation request for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (run-at-time
+   0 nil
+   (lambda ()
+     (condition-case err
+         (let ((result (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+                           '((action . "accept"))
+                         (codex-ide-mcp-elicitation-handle-request params))))
+           (codex-ide-log-message
+            session
+            "Elicitation request resolved as %s"
+            (alist-get 'action result))
+           (codex-ide--jsonrpc-send-response session id result))
+       (error
+        (codex-ide-log-message
+         session
+         "Elicitation request failed: %s"
+         (error-message-string err))
+        (codex-ide--jsonrpc-send-error session id -32603
+                                       (error-message-string err)))))))
+
 (defun codex-ide--handle-server-request (&optional session message)
   "Handle a server-initiated request MESSAGE for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -2512,6 +2548,14 @@ CHOICES is an alist of labels to returned values."
         (params (alist-get 'params message)))
     (codex-ide-log-message session "Received server request %s (id=%s)" method id)
     (pcase method
+      ((or "elicitation/create"
+           "mcpServer/elicitation/request")
+       (codex-ide--append-to-buffer
+        (codex-ide-session-buffer session)
+        (format "\n[%s]\n"
+                (codex-ide-mcp-elicitation-format-request params))
+        'shadow)
+       (codex-ide--handle-elicitation-request session id params))
       ("item/commandExecution/requestApproval"
        (codex-ide--handle-command-approval session id params))
       ("item/fileChange/requestApproval"
@@ -2676,6 +2720,17 @@ CHOICES is an alist of labels to returned values."
           buffer
           (format "\n[Codex error] %S\n" params)
           'error)))
+      ((or "notifications/elicitation/complete"
+           "mcpServer/elicitation/complete")
+       (codex-ide-log-message
+        session
+        "Elicitation completed: %s"
+        (alist-get 'elicitationId params))
+       (codex-ide--append-to-buffer
+        buffer
+        (format "\n[%s]\n"
+                (codex-ide-mcp-elicitation-format-completion params))
+        'shadow))
       (_
        nil))))
 

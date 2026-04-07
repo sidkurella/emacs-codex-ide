@@ -26,7 +26,7 @@
             (insert "import sys\n")
             (insert (format "with open(%S, 'w', encoding='utf-8') as handle:\n" argv-log))
             (insert "    json.dump(sys.argv[1:], handle)\n")
-            (insert "print(\"[]\")\n"))
+            (insert "print(json.dumps(\"[]\"))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
             (let ((json-object-type 'alist)
@@ -65,8 +65,6 @@
           (should (equal (aref argv 2) "--eval"))
           (should (string-match-p "codex-ide-bridge--json-tool-call"
                                   (aref argv 3)))
-          (should (string-match-p "princ"
-                                  (aref argv 3)))
           (with-current-buffer output-buffer
             (should (string-match-p "\"jsonrpc\":\"2.0\"" (buffer-string)))))
       (when (file-exists-p mock-emacsclient)
@@ -96,7 +94,7 @@
             (insert "    response = {'files': [{'buffer': 'example.el', 'file': '/tmp/example.el'}]}\n")
             (insert "elif 'emacs_get_diagnostics' in expr:\n")
             (insert "    response = {'buffer': 'example.el', 'diagnostics': [{'severity': 'error', 'message': 'Boom'}]}\n")
-            (insert "print(json.dumps(response, separators=(',', ':')))\n"))
+            (insert "print(json.dumps(json.dumps(response, separators=(',', ':'))))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
             (dolist (message

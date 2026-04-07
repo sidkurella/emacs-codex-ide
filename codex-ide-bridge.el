@@ -86,6 +86,23 @@ bridge starts the Emacs server automatically when needed."
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
+(defcustom codex-ide-emacs-bridge-require-approval nil
+  "Whether Emacs MCP bridge tool calls should require user approval.
+
+When nil, `codex-ide' auto-accepts approval requests and approval-like MCP
+elicitations that clearly refer to the configured Emacs MCP bridge server or
+one of its tools."
+  :type 'boolean
+  :group 'codex-ide)
+
+(defconst codex-ide-bridge--tool-names
+  '("emacs_open_file"
+    "emacs_all_open_files"
+    "emacs_get_diagnostics"
+    "emacs_window_list")
+  "Tool names exposed by the Emacs MCP bridge.")
+
 (defun codex-ide-bridge--toml-string (value)
   "Encode VALUE as a TOML string."
   (format "\"%s\""
@@ -110,6 +127,53 @@ bridge starts the Emacs server automatically when needed."
 (defun codex-ide-bridge--resolved-server-name ()
   "Return the emacsclient server name the bridge should target."
   (or codex-ide-emacs-bridge-server-name server-name))
+
+(defun codex-ide-bridge--approval-match-patterns ()
+  "Return strings that identify the configured Emacs MCP bridge."
+  (delete-dups
+   (delq nil
+         (append
+          (list codex-ide-emacs-tool-bridge-name
+                (format "mcp_servers.%s" codex-ide-emacs-tool-bridge-name))
+          codex-ide-bridge--tool-names))))
+
+(defun codex-ide-bridge--request-mentions-pattern-p (value patterns)
+  "Return non-nil when VALUE recursively contains any string in PATTERNS."
+  (let ((case-fold-search t))
+    (cond
+     ((stringp value)
+      (seq-some (lambda (pattern)
+                  (string-match-p (regexp-quote pattern) value))
+                patterns))
+     ((symbolp value)
+      (codex-ide-bridge--request-mentions-pattern-p (symbol-name value) patterns))
+     ((hash-table-p value)
+      (let ((matched nil))
+        (maphash (lambda (key entry)
+                   (when (or (codex-ide-bridge--request-mentions-pattern-p key patterns)
+                             (codex-ide-bridge--request-mentions-pattern-p entry patterns))
+                     (setq matched t)))
+                 value)
+        matched))
+     ((vectorp value)
+      (seq-some (lambda (entry)
+                  (codex-ide-bridge--request-mentions-pattern-p entry patterns))
+                value))
+     ((consp value)
+      (or (codex-ide-bridge--request-mentions-pattern-p (car value) patterns)
+          (codex-ide-bridge--request-mentions-pattern-p (cdr value) patterns)))
+     (t nil))))
+
+;;;###autoload
+(defun codex-ide-bridge-request-exempt-from-approval-p (params)
+  "Return non-nil when PARAMS describe an Emacs MCP bridge request.
+
+This is used to bypass user confirmation for bridge-originated approval
+requests when `codex-ide-emacs-bridge-require-approval' is nil."
+  (and (not codex-ide-emacs-bridge-require-approval)
+       (codex-ide-bridge--request-mentions-pattern-p
+        params
+        (codex-ide-bridge--approval-match-patterns))))
 
 ;;;###autoload
 (defun codex-ide-bridge-enabled-p ()
