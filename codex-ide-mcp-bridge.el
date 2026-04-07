@@ -97,10 +97,12 @@ one of its tools."
   :group 'codex-ide)
 
 (defconst codex-ide-mcp-bridge--tool-names
-  '("emacs_open_file"
-    "emacs_all_open_files"
-    "emacs_get_diagnostics"
-    "emacs_window_list")
+  '("get_all_open_file_buffers"
+    "get_diagnostics"
+    "get_window_list"
+    "ensure_file_buffer_open"
+    "view_file_buffer"
+    "kill_file_buffer")
   "Tool names exposed by the Emacs MCP bridge.")
 
 (defun codex-ide-mcp-bridge--toml-string (value)
@@ -406,32 +408,105 @@ Errors from `server-running-p' are treated as nil."
 
 ;; These functions are the Elisp implementations of the MCP bridge commands.
 
-(defun codex-ide-mcp-bridge--tool-call--emacs_get_context (_params)
-  "Handle an `emacs_get_context' bridge request."
+(defun codex-ide-mcp-bridge--tool-call--get_context (_params)
+  "Handle a `get_context' bridge request."
   (or (codex-ide-mcp-bridge--current-context)
       '((context . :json-null))))
 
-(defun codex-ide-mcp-bridge--tool-call--emacs_open_file (params)
-  "Handle an `emacs_open_file' bridge request with PARAMS."
+(defun codex-ide-mcp-bridge--resolve-file-buffer (path)
+  "Return the buffer visiting PATH, opening it if needed."
+  (find-file-noselect (expand-file-name path)))
+
+(defun codex-ide-mcp-bridge--goto-line-and-column (line column)
+  "Move point to LINE and COLUMN when provided."
+  (goto-char (point-min))
+  (when (and (integerp line) (> line 0))
+    (forward-line (1- line)))
+  (when (and (integerp column) (> column 0))
+    (move-to-column (1- column))))
+
+(defun codex-ide-mcp-bridge--find-target-window (origin)
+  "Return a non-ORIGIN window, splitting ORIGIN if needed."
+  (or (seq-find (lambda (window)
+                  (not (eq window origin)))
+                (window-list (selected-frame) 'no-minibuf origin))
+      (or (ignore-errors (split-window origin nil 'right))
+          (ignore-errors (split-window origin nil 'below))
+          (let ((split-width-threshold 0)
+                (split-height-threshold 0))
+            (ignore-errors
+              (with-selected-window origin
+                (split-window-sensibly origin))))
+          (error "Unable to create a window for file buffer view"))))
+
+(defun codex-ide-mcp-bridge--file-buffer-response (buffer &optional extra)
+  "Return a bridge response for BUFFER merged with EXTRA."
+  (append
+   `((path . ,(buffer-file-name buffer))
+     (buffer . ,(buffer-name buffer))
+     (line . ,(with-current-buffer buffer
+                (line-number-at-pos)))
+     (column . ,(with-current-buffer buffer
+                  (1+ (current-column)))))
+   extra))
+
+(defun codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open (params)
+  "Handle an `ensure_file_buffer_open' bridge request with PARAMS."
   (let ((path (alist-get 'path params))
-        (line (alist-get 'line params))
-        (column (alist-get 'column params)))
+        buffer
+        already-open)
     (unless (and (stringp path) (not (string-empty-p path)))
       (error "Missing file path"))
     (setq path (expand-file-name path))
-    (find-file path)
-    (goto-char (point-min))
-    (when (and (integerp line) (> line 0))
-      (forward-line (1- line)))
-    (when (and (integerp column) (> column 0))
-      (move-to-column (1- column)))
-    `((path . ,path)
-      (buffer . ,(buffer-name))
-      (line . ,(line-number-at-pos))
-      (column . ,(1+ (current-column))))))
+    (setq already-open (and (find-buffer-visiting path) t))
+    (setq buffer (codex-ide-mcp-bridge--resolve-file-buffer path))
+    (codex-ide-mcp-bridge--file-buffer-response
+     buffer
+     `((already-open . ,already-open)))))
 
-(defun codex-ide-mcp-bridge--tool-call--emacs_all_open_files (_params)
-  "Handle an `emacs_all_open_files' bridge request."
+(defun codex-ide-mcp-bridge--tool-call--view_file_buffer (params)
+  "Handle a `view_file_buffer' bridge request with PARAMS."
+  (let ((path (alist-get 'path params))
+        (line (alist-get 'line params))
+        (column (alist-get 'column params))
+        origin
+        target
+        buffer)
+    (unless (and (stringp path) (not (string-empty-p path)))
+      (error "Missing file path"))
+    (setq path (expand-file-name path))
+    (setq buffer (codex-ide-mcp-bridge--resolve-file-buffer path))
+    (setq origin (selected-window))
+    (save-selected-window
+      (setq target (codex-ide-mcp-bridge--find-target-window origin))
+      (set-window-buffer target buffer)
+      (with-selected-window target
+        (codex-ide-mcp-bridge--goto-line-and-column line column)))
+    (codex-ide-mcp-bridge--file-buffer-response
+     buffer
+     `((window-id . ,(format "%s" target))))))
+
+(defun codex-ide-mcp-bridge--tool-call--kill_file_buffer (params)
+  "Handle a `kill_file_buffer' bridge request with PARAMS."
+  (let* ((path (alist-get 'path params))
+         (expanded-path (and (stringp path)
+                             (not (string-empty-p path))
+                             (expand-file-name path)))
+         (buffer (and expanded-path
+                      (find-buffer-visiting expanded-path))))
+    (unless expanded-path
+      (error "Missing file path"))
+    (if (not buffer)
+        `((path . ,expanded-path)
+          (buffer . :json-null)
+          (killed . :json-false))
+      (let ((killed (kill-buffer buffer)))
+        `((path . ,expanded-path)
+          (buffer . ,(buffer-name buffer))
+          (killed . ,(if killed t :json-false)))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_all_open_file_buffers (_params)
+  "Handle a `get_all_open_file_buffers' bridge request."
   `((files . ,(seq-filter
                #'identity
                (mapcar
@@ -445,8 +520,8 @@ Errors from `server-running-p' are treated as nil."
                         (read-only . ,buffer-read-only)))))
                 (buffer-list))))))
 
-(defun codex-ide-mcp-bridge--tool-call--emacs_get_diagnostics (params)
-  "Handle an `emacs_get_diagnostics' bridge request with PARAMS."
+(defun codex-ide-mcp-bridge--tool-call--get_diagnostics (params)
+  "Handle a `get_diagnostics' bridge request with PARAMS."
   (let* ((buffer-name (alist-get 'buffer params))
          (buffer (and (stringp buffer-name)
                       (get-buffer buffer-name))))
@@ -460,8 +535,8 @@ Errors from `server-running-p' are treated as nil."
                             (codex-ide-mcp-bridge--flycheck-diagnostics)
                             '()))))))
 
-(defun codex-ide-mcp-bridge--tool-call--emacs_window_list (_params)
-  "Handle an `emacs_window_list' bridge request."
+(defun codex-ide-mcp-bridge--tool-call--get_window_list (_params)
+  "Handle a `get_window_list' bridge request."
   (let ((windows
          (mapcar
           (lambda (window)

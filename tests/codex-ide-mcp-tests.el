@@ -37,7 +37,7 @@
                 '((jsonrpc . "2.0")
                   (id . 1)
                   (method . "tools/call")
-                  (params . ((name . "emacs_open_file")
+                  (params . ((name . "view_file_buffer")
                              (arguments . ((path . "/tmp/example.el")))))))
                "\n")))
           (should
@@ -88,11 +88,11 @@
             (insert "import sys\n")
             (insert "expr = sys.argv[-1]\n")
             (insert "response = []\n")
-            (insert "if 'emacs_open_file' in expr:\n")
-            (insert "    response = {'tool': 'emacs_open_file', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
-            (insert "elif 'emacs_all_open_files' in expr:\n")
+            (insert "if 'view_file_buffer' in expr:\n")
+            (insert "    response = {'tool': 'view_file_buffer', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
+            (insert "elif 'get_all_open_file_buffers' in expr:\n")
             (insert "    response = {'files': [{'buffer': 'example.el', 'file': '/tmp/example.el'}]}\n")
-            (insert "elif 'emacs_get_diagnostics' in expr:\n")
+            (insert "elif 'get_diagnostics' in expr:\n")
             (insert "    response = {'buffer': 'example.el', 'diagnostics': [{'severity': 'error', 'message': 'Boom'}]}\n")
             (insert "print(json.dumps(json.dumps(response, separators=(',', ':'))))\n"))
           (set-file-modes mock-emacsclient #o755)
@@ -106,15 +106,15 @@
                       `((jsonrpc . "2.0") (id . 2) (method . "tools/list")
                         (params . ,(make-hash-table)))
                       `((jsonrpc . "2.0") (id . 3) (method . "tools/call")
-                        (params . ((name . "emacs_open_file")
+                        (params . ((name . "view_file_buffer")
                                    (arguments . ((path . "/tmp/example.el")
                                                  (line . 9)
                                                  (column . 2))))))
                       `((jsonrpc . "2.0") (id . 4) (method . "tools/call")
-                        (params . ((name . "emacs_all_open_files")
+                        (params . ((name . "get_all_open_file_buffers")
                                    (arguments . ()))))
                       `((jsonrpc . "2.0") (id . 5) (method . "tools/call")
-                        (params . ((name . "emacs_get_diagnostics")
+                        (params . ((name . "get_diagnostics")
                                    (arguments . ((buffer . "example.el"))))))))
               (let ((json-object-type 'alist)
                     (json-array-type 'list)
@@ -161,15 +161,17 @@
               (let ((tools (alist-get "tools"
                                       (alist-get "result" (nth 1 responses) nil nil #'equal)
                                       nil nil #'equal)))
-                (should (= (length tools) 4))
+                (should (= (length tools) 6))
                 (should
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))
                                 tools)
-                        '("emacs_open_file"
-                          "emacs_all_open_files"
-                          "emacs_get_diagnostics"
-                          "emacs_window_list"))))
+                        '("get_all_open_file_buffers"
+                          "get_diagnostics"
+                          "get_window_list"
+                          "ensure_file_buffer_open"
+                          "view_file_buffer"
+                          "kill_file_buffer"))))
               (let* ((open-file-text
                       (alist-get "text"
                                  (car (alist-get "content"
@@ -182,13 +184,13 @@
                                                  (alist-get "result" (nth 3 responses) nil nil #'equal)
                                                  nil nil #'equal))
                                  nil nil #'equal))
-                     (diagnostics-text
+                      (diagnostics-text
                       (alist-get "text"
                                  (car (alist-get "content"
                                                  (alist-get "result" (nth 4 responses) nil nil #'equal)
                                                  nil nil #'equal))
                                  nil nil #'equal)))
-                (should (string-match-p "\"tool\": \"emacs_open_file\"" open-file-text))
+                (should (string-match-p "\"tool\": \"view_file_buffer\"" open-file-text))
                 (should (string-match-p "\"path\": \"/tmp/example.el\"" open-file-text))
                 (should (string-match-p "\"files\"" open-files-text))
                 (should (string-match-p "\"diagnostics\"" diagnostics-text))

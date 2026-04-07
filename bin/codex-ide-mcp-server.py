@@ -26,8 +26,46 @@ class EmacsBridgeCommand:
 
 COMMANDS = [
     EmacsBridgeCommand(
-        name="emacs_open_file",
-        description="Open a file in Emacs and optionally jump to line and column.",
+        name="get_all_open_file_buffers",
+        description="List all currently open file-backed buffers in Emacs.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="get_diagnostics",
+        description="Return Flymake or Flycheck diagnostics for a buffer name.",
+        inputSchema={
+            "type": "object",
+            "properties": {"buffer": {"type": "string"}},
+            "required": ["buffer"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="get_window_list",
+        description="List visible windows in the selected frame and their buffers.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="ensure_file_buffer_open",
+        description="Ensure a file-backed buffer exists without displaying it in a window.",
+        inputSchema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="view_file_buffer",
+        description="Display a file-backed buffer in a non-selected window and optionally jump to line and column.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -40,30 +78,12 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="emacs_all_open_files",
-        description="List all currently open file-backed buffers in Emacs.",
+        name="kill_file_buffer",
+        description="Kill the buffer visiting a file, prompting if it has unsaved changes.",
         inputSchema={
             "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_get_diagnostics",
-        description="Return Flymake or Flycheck diagnostics for a buffer name.",
-        inputSchema={
-            "type": "object",
-            "properties": {"buffer": {"type": "string"}},
-            "required": ["buffer"],
-            "additionalProperties": False,
-        },
-    ),
-    EmacsBridgeCommand(
-        name="emacs_window_list",
-        description="List visible windows in the selected frame and their buffers.",
-        inputSchema={
-            "type": "object",
-            "properties": {},
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
             "additionalProperties": False,
         },
     ),
