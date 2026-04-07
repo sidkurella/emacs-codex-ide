@@ -234,6 +234,12 @@ When nil, never include active-buffer context automatically."
                  (const :tag "Disabled" nil))
   :group 'codex-ide)
 
+;;;###autoload
+(defcustom codex-ide-resume-summary-turn-limit 20
+  "How many recent turns to summarize when resuming a stored thread."
+  :type 'integer
+  :group 'codex-ide)
+
 (defvar codex-ide--cli-available nil
   "Whether the Codex CLI has been detected successfully.")
 
@@ -863,6 +869,25 @@ inserted text."
   (codex-ide--append-agent-text
    buffer
    (codex-ide--output-separator-string)
+   'codex-ide-output-separator-face))
+
+(defun codex-ide--restored-transcript-separator-string ()
+  "Return the separator shown between restored history and the live prompt."
+  (let* ((label "[End of restored session]")
+         (width (length (string-trim-right (codex-ide--output-separator-string))))
+         (padding (max 0 (- width (length label))))
+         (left (/ padding 2))
+         (right (- padding left)))
+    (format "\n%s%s%s\n\n"
+            (make-string left ?-)
+            label
+            (make-string right ?-))))
+
+(defun codex-ide--append-restored-transcript-separator (buffer)
+  "Append the restored-history boundary separator to BUFFER."
+  (codex-ide--append-agent-text
+   buffer
+   (codex-ide--restored-transcript-separator-string)
    'codex-ide-output-separator-face))
 
 (defun codex-ide--parse-file-link-target (target)
@@ -2169,9 +2194,274 @@ The result is an alist with `formatted' and `summary' entries."
           ,@(when codex-ide-model
               `((model . ,codex-ide-model)))))))
 
+(defun codex-ide--thread-read-params (thread-id &optional include-turns)
+  "Build `thread/read` params for THREAD-ID.
+When INCLUDE-TURNS is non-nil, request the stored turn history too."
+  (delq nil
+        `((threadId . ,thread-id)
+          ,@(when include-turns
+              '((includeTurns . t))))))
+
+(defun codex-ide--read-thread (&optional session thread-id include-turns)
+  "Read stored metadata for THREAD-ID using SESSION.
+When INCLUDE-TURNS is non-nil, request the stored turn history too."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (unless (and (stringp thread-id)
+               (not (string-empty-p thread-id)))
+    (error "Invalid thread id: %S" thread-id))
+  (codex-ide--request-sync
+   session
+   "thread/read"
+   (codex-ide--thread-read-params thread-id include-turns)))
+
 (defun codex-ide--extract-thread-id (result)
   "Extract the thread id from RESULT."
   (alist-get 'id (alist-get 'thread result)))
+
+(defun codex-ide--thread-read-turns (thread-read)
+  "Return turn history from THREAD-READ."
+  (or (alist-get 'turns thread-read)
+      (alist-get 'turns (alist-get 'thread thread-read))
+      []))
+
+(defun codex-ide--thread-read--message-text (message)
+  "Extract readable text from a MESSAGE-like alist."
+  (let ((text (or (alist-get 'text message)
+                  (alist-get 'message message)
+                  (alist-get 'prompt message)
+                  (alist-get 'summary message)
+                  (alist-get 'content message))))
+    (cond
+     ((stringp text)
+      text)
+     ((vectorp text)
+      (string-join
+       (delq nil
+             (mapcar #'codex-ide--thread-read--message-text
+                     (append text nil)))
+       "\n"))
+     ((listp text)
+      (string-join
+       (delq nil
+             (mapcar #'codex-ide--thread-read--message-text text))
+       "\n"))
+     (t nil))))
+
+(defun codex-ide--thread-read--item-kind (item)
+  "Return a normalized kind symbol for thread ITEM."
+  (let ((type (alist-get 'type item)))
+    (cond
+     ((member type '("userMessage" userMessage "user" user))
+      'user)
+     ((member type '("agentMessage" agentMessage
+                     "assistantMessage" assistantMessage
+                     "assistant" assistant))
+      'assistant)
+     ((member (alist-get 'role item) '("user" user))
+      'user)
+     ((member (alist-get 'role item) '("assistant" assistant))
+      'assistant)
+     ((member (alist-get 'source item) '("user" user))
+      'user)
+     ((member (alist-get 'source item) '("assistant" assistant))
+      'assistant)
+     ((member (alist-get 'author item) '("user" user))
+      'user)
+     ((member (alist-get 'author item) '("assistant" assistant))
+      'assistant)
+     (t nil))))
+
+(defun codex-ide--thread-read--collect-item-texts (items &optional kind)
+  "Collect readable texts from ITEMS, optionally filtered by KIND."
+  (let ((sequence (cond
+                   ((vectorp items) (append items nil))
+                   ((listp items) items)
+                   (t nil)))
+        texts)
+    (dolist (item sequence (nreverse texts))
+      (when (and (listp item)
+                 (or (null kind)
+                     (eq (codex-ide--thread-read--item-kind item) kind)))
+        (let ((text (codex-ide--thread-read--message-text item)))
+          (when (and (stringp text)
+                     (not (string-empty-p (string-trim text))))
+            (push text texts)))))))
+
+(defun codex-ide--thread-read-user-text (turn)
+  "Return a compact user prompt text for TURN, if available."
+  (or (let ((text (alist-get 'userMessage turn)))
+        (when (stringp text) text))
+      (let ((text (alist-get 'prompt turn)))
+        (when (stringp text) text))
+      (let ((texts (codex-ide--thread-read--collect-item-texts (alist-get 'input turn))))
+        (when texts
+          (string-join texts "\n")))
+      (let ((texts (codex-ide--thread-read--collect-item-texts
+                    (alist-get 'messages turn) 'user)))
+        (when texts
+          (car (last texts))))
+      (let ((texts (codex-ide--thread-read--collect-item-texts
+                    (alist-get 'items turn) 'user)))
+        (when texts
+          (car (last texts))))))
+
+(defun codex-ide--thread-read-agent-text (turn)
+  "Return a compact agent summary text for TURN, if available."
+  (or (let ((text (alist-get 'assistantMessage turn)))
+        (when (stringp text) text))
+      (let ((text (alist-get 'summary turn)))
+        (when (stringp text) text))
+      (let ((texts (codex-ide--thread-read--collect-item-texts
+                    (alist-get 'messages turn) 'assistant)))
+        (when texts
+          (car (last texts))))
+      (let ((texts (codex-ide--thread-read--collect-item-texts
+                    (alist-get 'items turn) 'assistant)))
+        (when texts
+          (car (last texts))))))
+
+(defun codex-ide--thread-read-format-snippet (text)
+  "Format TEXT as a compact single-line snippet."
+  (when (stringp text)
+    (let* ((trimmed (string-trim text))
+           (single-line (replace-regexp-in-string "[ \t\n\r]+" " " trimmed)))
+      (unless (string-empty-p single-line)
+        (truncate-string-to-width single-line 120 nil nil t)))))
+
+(defun codex-ide--strip-emacs-context-prefix (text)
+  "Remove any leading `[Emacs context]` block from TEXT."
+  (let ((context-end "[/Emacs context]"))
+    (if (and (stringp text)
+             (string-match (regexp-quote context-end) text))
+        (string-trim (substring text (match-end 0)))
+      text)))
+
+(defun codex-ide--thread-read-display-user-text (text)
+  "Normalize stored user TEXT for transcript display."
+  (when (stringp text)
+    (let ((display-text (string-trim (codex-ide--strip-emacs-context-prefix text))))
+      (unless (string-empty-p display-text)
+        display-text))))
+
+(defun codex-ide--thread-read-items (turn)
+  "Return ordered transcript items for TURN."
+  (or (alist-get 'items turn)
+      (alist-get 'messages turn)
+      []))
+
+(defun codex-ide--append-restored-user-message (session text)
+  "Append restored user TEXT to SESSION like a submitted prompt."
+  (let ((buffer (codex-ide-session-buffer session))
+        (display-text (codex-ide--thread-read-display-user-text text)))
+    (when (and (buffer-live-p buffer)
+               (stringp display-text)
+               (not (string-empty-p display-text)))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t)
+              prompt-start)
+          (goto-char (point-max))
+          (cond
+           ((= (point) (point-min)))
+           ((and (eq (char-before (point)) ?\n)
+                 (save-excursion
+                   (forward-char -1)
+                   (or (bobp)
+                       (eq (char-before (point)) ?\n)))))
+           ((eq (char-before (point)) ?\n)
+            (insert "\n"))
+           (t
+            (insert "\n\n")))
+          (setq prompt-start (point))
+          (insert (propertize "> " 'face 'codex-ide-user-prompt-face))
+          (insert display-text)
+          (codex-ide--style-user-prompt-region prompt-start (point))
+          (codex-ide--freeze-region prompt-start (point))
+          (insert "\n\n")
+          (codex-ide--freeze-region prompt-start (point))))
+      t)))
+
+(defun codex-ide--append-restored-agent-message (session item)
+  "Append restored agent ITEM to SESSION like live agent output."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (item-id (or (alist-get 'id item) "restored-agent-message"))
+         (text (codex-ide--thread-read--message-text item)))
+    (when (and (buffer-live-p buffer)
+               (stringp text)
+               (not (string-empty-p (string-trim text))))
+      (let ((codex-ide--current-agent-item-type "agentMessage"))
+        (codex-ide--ensure-output-spacing buffer)
+        (codex-ide--append-output-separator buffer)
+        (codex-ide--append-agent-text buffer "\n")
+        (setf (codex-ide-session-current-message-start-marker session)
+              (copy-marker (with-current-buffer buffer (point-max))))
+        (setf (codex-ide-session-current-message-item-id session) item-id
+              (codex-ide-session-current-message-prefix-inserted session) t)
+        (codex-ide--append-agent-text buffer text)
+        (when-let ((start (codex-ide-session-current-message-start-marker session)))
+          (with-current-buffer buffer
+            (codex-ide--render-markdown-region start (point-max)))))
+      t)))
+
+(defun codex-ide--replay-thread-read-turn (session turn)
+  "Replay stored TURN into SESSION.
+Return non-nil when any transcript content was restored."
+  (let ((items (append (codex-ide--thread-read-items turn) nil))
+        (restored nil))
+    (dolist (item items restored)
+      (pcase (codex-ide--thread-read--item-kind item)
+        ('user
+         (setq restored
+               (or (codex-ide--append-restored-user-message
+                    session
+                    (codex-ide--thread-read--message-text item))
+                   restored))
+         (setf (codex-ide-session-output-prefix-inserted session) t
+               (codex-ide-session-current-message-item-id session) nil
+               (codex-ide-session-current-message-prefix-inserted session) nil
+               (codex-ide-session-current-message-start-marker session) nil))
+        ('assistant
+         (setq restored
+               (or (codex-ide--append-restored-agent-message session item)
+                   restored)))
+        (_ nil)))))
+
+(defun codex-ide--restore-thread-read-transcript (&optional session thread-read)
+  "Replay a stored transcript from THREAD-READ into SESSION.
+Signal an error when THREAD-READ lacks replayable transcript items."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let* ((limit (max 0 codex-ide-resume-summary-turn-limit))
+         (turns (append (codex-ide--thread-read-turns thread-read) nil))
+         (recent-turns (cond
+                        ((<= limit 0) nil)
+                        ((> (length turns) limit) (last turns limit))
+                        (t turns)))
+         (restored nil))
+    (unless recent-turns
+      (error "Stored thread has no replayable turns"))
+    (dolist (turn recent-turns restored)
+      (setq restored
+            (or (codex-ide--replay-thread-read-turn session turn)
+                restored)))
+    (unless restored
+      (error
+       (concat
+        "Stored thread transcript could not be replayed. "
+        "Expected replayable userMessage/agentMessage turn items.")))
+    (when restored
+      (codex-ide--append-to-buffer (codex-ide-session-buffer session) "\n")
+      (codex-ide--append-restored-transcript-separator
+       (codex-ide-session-buffer session)))
+    (setf (codex-ide-session-current-turn-id session) nil
+          (codex-ide-session-current-message-item-id session) nil
+          (codex-ide-session-current-message-prefix-inserted session) nil
+          (codex-ide-session-current-message-start-marker session) nil
+          (codex-ide-session-output-prefix-inserted session) nil
+          (codex-ide-session-item-states session) (make-hash-table :test 'equal))
+    restored))
 
 (defun codex-ide--format-thread-updated-at (updated-at)
   "Format UPDATED-AT for thread labels."
@@ -2398,25 +2688,51 @@ MODE can be nil or `new', `continue', or `resume'."
                                       (codex-ide--latest-thread session))
                                     (user-error "No Codex threads found for %s"
                                                 (abbreviate-file-name working-dir))))
-                        (thread-id (alist-get 'id thread)))
+                        (thread-id (alist-get 'id thread))
+                        (thread-read
+                         (condition-case err
+                             (codex-ide--read-thread session thread-id t)
+                           (error
+                            (codex-ide-log-message
+                             session
+                             "Unable to read stored thread %s before continue: %s"
+                             thread-id
+                             (error-message-string err))
+                            nil))))
                    (codex-ide--request-sync
                     session
                     "thread/resume"
                     (with-current-buffer (codex-ide-session-buffer session)
-                      (codex-ide--thread-resume-params thread-id)))
+                   (codex-ide--thread-resume-params thread-id)))
                    (setf (codex-ide-session-thread-id session) thread-id)
-                   (codex-ide-log-message session "Continued thread %s" thread-id)))
+                   (codex-ide-log-message session "Continued thread %s" thread-id)
+                   (when thread-read
+                     (codex-ide--restore-thread-read-transcript
+                      session thread-read))))
                 ('resume
                  (let* ((thread (with-current-buffer (codex-ide-session-buffer session)
                                   (codex-ide--pick-thread session)))
-                        (thread-id (alist-get 'id thread)))
+                        (thread-id (alist-get 'id thread))
+                        (thread-read
+                         (condition-case err
+                             (codex-ide--read-thread session thread-id t)
+                           (error
+                            (codex-ide-log-message
+                             session
+                             "Unable to read stored thread %s before resume: %s"
+                             thread-id
+                             (error-message-string err))
+                            nil))))
                    (codex-ide--request-sync
                     session
                     "thread/resume"
                     (with-current-buffer (codex-ide-session-buffer session)
-                      (codex-ide--thread-resume-params thread-id)))
+                   (codex-ide--thread-resume-params thread-id)))
                    (setf (codex-ide-session-thread-id session) thread-id)
-                   (codex-ide-log-message session "Resumed thread %s" thread-id))))
+                   (codex-ide-log-message session "Resumed thread %s" thread-id)
+                   (when thread-read
+                     (codex-ide--restore-thread-read-transcript
+                      session thread-read)))))
               (setf (codex-ide-session-status session) "idle")
               (codex-ide--update-header-line session)
               (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))

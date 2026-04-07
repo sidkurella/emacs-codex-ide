@@ -489,6 +489,232 @@
              "[/Emacs context]\n\n  Explain the failure"))
     "Explain the failure")))
 
+(ert-deftest codex-ide-thread-read-display-user-text-strips-emacs-context-prefix ()
+  (should
+   (equal
+    (codex-ide--thread-read-display-user-text
+     (concat "[Emacs context]\n"
+             "Buffer: example.el\n"
+             "Cursor: line 10, column 2\n"
+             "[/Emacs context]\n\n"
+             "Explain the failure"))
+    "Explain the failure")))
+
+(ert-deftest codex-ide-thread-read-display-user-text-preserves-multiline-prompts ()
+  (should
+   (equal
+    (codex-ide--thread-read-display-user-text
+     (concat "[Emacs context]\n"
+             "Buffer: example.el\n"
+             "[/Emacs context]\n\n"
+             "First line\n"
+             "Second line\n"
+             "Third line"))
+    "First line\nSecond line\nThird line")))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-errors-when-turns-are-missing ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should-error
+         (codex-ide--restore-thread-read-transcript
+          session
+          '((thread . ((id . "thread-missing-turns")))))
+         :type 'error)))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-errors-on-unsupported-turn-shape ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should-error
+         (codex-ide--restore-thread-read-transcript
+          session
+          '((thread . ((id . "thread-unsupported")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "commandExecution")
+                                             (id . "item-1")))))))))))
+         :type 'error)))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-replays-item-based-turns ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          '((thread . ((id . "thread-restore-1")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "[Emacs context]\nBuffer: my-table.py\n[/Emacs context]\n\nWhat DB columns are on MyTable?")))))
+                                            ((type . "agentMessage")
+                                             (id . "item-1")
+                                             (text . "Columns include `my_table_id` and `price`."))))))))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should (codex-ide--restore-thread-read-transcript session thread-read))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (let ((buffer-text (buffer-string)))
+            (should (string-match-p "^> What DB columns are on MyTable\\?" buffer-text))
+            (should-not (string-match-p "\\[Emacs context\\]" buffer-text))
+            (should (string-match-p "Columns include `my_table_id` and `price`\\." buffer-text))
+            (should (string-match-p
+                     (concat (regexp-quote "Columns include `my_table_id` and `price`.")
+                             "\n"
+                             (regexp-quote
+                              (codex-ide--restored-transcript-separator-string)))
+                     buffer-text))
+            (goto-char (point-min))
+            (search-forward "my_table_id")
+            (should (eq (get-text-property (1- (point)) 'face)
+                        'font-lock-keyword-face))))))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-keeps-blank-line-between-agent-and-next-prompt ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (turn-1
+          `((id . "turn-1")
+            (items . (((type . "userMessage")
+                       (content . (((type . "text")
+                                    (text . "What DB columns are on MyTable?")))))
+                      ((type . "agentMessage")
+                       (id . "item-1")
+                       (text . "If you want, I can also give this as the exact SQL-ish schema shape with field types/nullability."))))))
+         (turn-2
+          `((id . "turn-2")
+            (items . (((type . "userMessage")
+                       (content . (((type . "text")
+                                    (text . "What is MyTable's primary key?")))))
+                      ((type . "agentMessage")
+                       (id . "item-2")
+                       (text . "`MyTable`'s primary key is `my_table_id`."))))))
+         (thread-read
+          `((thread . ((id . "thread-restore-2")
+                       (turns . (,turn-1 ,turn-2)))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should (codex-ide--restore-thread-read-transcript session thread-read))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (should
+           (string-match-p
+            (concat
+             (regexp-quote
+              "If you want, I can also give this as the exact SQL-ish schema shape with field types/nullability.")
+             "\n\n> What is MyTable's primary key\\?")
+            (buffer-string))))))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-preserves-multiline-user-prompts ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          '((thread . ((id . "thread-restore-3")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "[Emacs context]\nBuffer: my-table.py\n[/Emacs context]\n\nLine one\nLine two\nLine three")))))
+                                            ((type . "agentMessage")
+                                             (id . "item-1")
+                                             (text . "Acknowledged."))))))))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should (codex-ide--restore-thread-read-transcript session thread-read))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (should (string-match-p
+                   (regexp-quote "> Line one\nLine two\nLine three")
+                   (buffer-string)))
+          (should-not (string-match-p "\\[Emacs context\\]" (buffer-string))))))))
+
+(ert-deftest codex-ide-start-session-resume-replays-thread-read-transcript ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '())
+        (thread '((id . "thread-resume-1")
+                  (preview . "Resume flow"))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--display-buffer-in-side-window)
+                   (lambda (_buffer) (selected-window)))
+                  ((symbol-function 'codex-ide--pick-thread)
+                   (lambda (&rest _) thread))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method params)
+                     (push (cons method params) requests)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/read"
+                        '((thread . ((id . "thread-resume-1")
+                                     (name . "Resume flow")
+                                     (preview . "Investigate stale prompt")))
+                          (turns . (((id . "turn-1")
+                                     (items . (((type . "userMessage")
+                                                (content . (((type . "text")
+                                                             (text . "Why is resume stale?")))))
+                                               ((type . "agentMessage")
+                                                (id . "item-1")
+                                                (text . "The prompt was restored too early.")))))))))
+                       ("thread/resume" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (let ((session (codex-ide--start-session 'resume)))
+            (should (string= (codex-ide-session-thread-id session) "thread-resume-1"))
+            (should (equal (mapcar #'car (nreverse requests))
+                           '("initialize" "thread/read" "thread/resume")))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (let ((buffer-text (buffer-string)))
+                (should (string-match-p "^> Why is resume stale\\?" buffer-text))
+                (should (string-match-p "The prompt was restored too early\\." buffer-text))
+                (should (string-match-p
+                         (concat (regexp-quote "The prompt was restored too early.")
+                                 "\n"
+                                 (regexp-quote
+                                  (codex-ide--restored-transcript-separator-string))
+                                 "> ")
+                         buffer-text))
+                (goto-char (point-max))
+                (forward-line 0)
+                (should (looking-at-p "> "))))))))))
+
+(ert-deftest codex-ide-start-session-resume-errors-when-thread-read-is-not-replayable ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (thread '((id . "thread-resume-bad")
+                  (preview . "Bad resume"))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--display-buffer-in-side-window)
+                   (lambda (_buffer) (selected-window)))
+                  ((symbol-function 'codex-ide--pick-thread)
+                   (lambda (&rest _) thread))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/read"
+                        '((thread . ((id . "thread-resume-bad")
+                                     (turns . (((id . "turn-1")
+                                                (items . (((type . "commandExecution")
+                                                           (id . "item-1")))))))))))
+                       ("thread/resume" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (should-error
+           (codex-ide--start-session 'resume)
+           :type 'error)
+          (should-not (codex-ide--get-session))
+          (should-not (codex-ide--has-live-sessions-p)))))))
+
 (ert-deftest codex-ide-mcp-bridge-get-buffer-info-returns-shared-buffer-shape ()
   (let ((buffer (generate-new-buffer " *codex-ide-mcp-bridge-info*")))
     (unwind-protect
