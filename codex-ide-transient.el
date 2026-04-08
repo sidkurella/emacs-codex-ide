@@ -59,47 +59,30 @@
 
 (defun codex-ide--start-description ()
   "Return the dynamic description for the start action."
-  (if (codex-ide--has-active-session-p)
-      (propertize "Start new session (session already running)"
-                  'face 'transient-inactive-value)
-    "Start new Codex session"))
+  "Start new Codex session")
 
 (defun codex-ide--resume-description ()
   "Return the dynamic description for the resume action."
-  (if (codex-ide--has-active-session-p)
-      "Resume with picker (replaces current session)"
-    "Resume with picker"))
+  "Resume with picker")
 
 (defun codex-ide--continue-description ()
   "Return the dynamic description for the continue action."
-  (if (codex-ide--has-active-session-p)
-      (propertize "Continue most recent (session already running)"
-                  'face 'transient-inactive-value)
-    "Continue most recent"))
+  "Continue most recent")
 
 (defun codex-ide--start-from-menu ()
-  "Start Codex, optionally replacing an active session."
+  "Start a new Codex session."
   (interactive)
-  (if (codex-ide--has-active-session-p)
-      (when (y-or-n-p
-             (format "Quit existing Codex session in %s and start a new one? "
-                     (abbreviate-file-name (codex-ide--get-working-directory))))
-        (codex-ide-stop)
-        (codex-ide))
-    (codex-ide)))
+  (codex-ide))
 
 (defun codex-ide--resume-from-menu ()
   "Resume Codex using the thread picker."
   (interactive)
   (codex-ide-resume))
 
-(defun codex-ide--continue-if-no-session ()
-  "Continue the most recent Codex session when there is no active session."
+(defun codex-ide--continue-from-menu ()
+  "Continue the most recent Codex session."
   (interactive)
-  (if (codex-ide--has-active-session-p)
-      (message "Codex session already running in %s"
-               (abbreviate-file-name (codex-ide--get-working-directory)))
-    (codex-ide-continue)))
+  (codex-ide-continue))
 
 (transient-define-suffix codex-ide--set-cli-path (path)
   "Set the Codex CLI path."
@@ -235,7 +218,7 @@
   ["Codex IDE"
    ["Session"
     ("s" codex-ide--start-from-menu :description codex-ide--start-description)
-    ("c" codex-ide--continue-if-no-session :description codex-ide--continue-description)
+    ("c" codex-ide--continue-from-menu :description codex-ide--continue-description)
     ("r" codex-ide--resume-from-menu :description codex-ide--resume-description)
     ("q" "Stop current session" codex-ide-stop)
     ("l" "List session buffers" codex-ide-list-session-buffers)]

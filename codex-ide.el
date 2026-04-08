@@ -271,6 +271,10 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initarg :directory
     :initform nil
     :accessor codex-ide-session-directory)
+   (name-suffix
+    :initarg :name-suffix
+    :initform nil
+    :accessor codex-ide-session-name-suffix)
    (process
    :initarg :process
     :initform nil
@@ -427,17 +431,36 @@ Add this variable to `savehist-additional-variables' to persist it.")
   "Return the display name for DIRECTORY."
   (file-name-nondirectory (directory-file-name directory)))
 
+(defun codex-ide--append-buffer-name-suffix (buffer-name suffix)
+  "Return BUFFER-NAME with numeric SUFFIX inserted before the closing `*'.
+When SUFFIX is nil, return BUFFER-NAME unchanged."
+  (if suffix
+      (replace-regexp-in-string
+       (rx "*" string-end)
+       (format "<%d>*" suffix)
+       buffer-name
+       t t)
+    buffer-name))
+
 (defun codex-ide--default-buffer-name (directory)
-  "Generate a default Codex session buffer name for DIRECTORY."
+  "Generate the base Codex session buffer name for DIRECTORY."
   (format "*%s[%s]*"
           codex-ide-buffer-name-prefix
           (codex-ide--project-name directory)))
 
-(defun codex-ide--log-buffer-name (directory)
-  "Generate the default Codex log buffer name for DIRECTORY."
-  (format "*%s-log[%s]*"
-          codex-ide-buffer-name-prefix
-          (codex-ide--project-name directory)))
+(defun codex-ide--session-buffer-name (directory &optional suffix)
+  "Generate the Codex session buffer name for DIRECTORY and SUFFIX."
+  (codex-ide--append-buffer-name-suffix
+   (funcall codex-ide-buffer-name-function directory)
+   suffix))
+
+(defun codex-ide--log-buffer-name (directory &optional suffix)
+  "Generate the Codex log buffer name for DIRECTORY and SUFFIX."
+  (codex-ide--append-buffer-name-suffix
+   (format "*%s-log[%s]*"
+           codex-ide-buffer-name-prefix
+           (codex-ide--project-name directory))
+   suffix))
 
 (defun codex-ide--status-label (status)
   "Return a display label for STATUS."
@@ -500,7 +523,10 @@ Add this variable to `savehist-additional-variables' to persist it.")
   (or (and (buffer-live-p (codex-ide-session-log-buffer session))
            (codex-ide-session-log-buffer session))
       (let* ((directory (codex-ide-session-directory session))
-             (buffer (get-buffer-create (codex-ide--log-buffer-name directory))))
+             (buffer (get-buffer-create
+                      (codex-ide--log-buffer-name
+                       directory
+                       (codex-ide-session-name-suffix session)))))
         (codex-ide--initialize-log-buffer buffer directory)
         (setf (codex-ide-session-log-buffer session) buffer)
         buffer)))
@@ -580,10 +606,23 @@ Add this variable to `savehist-additional-variables' to persist it.")
     (codex-ide--set-project-persisted-state state session directory)
     value))
 
-(defun codex-ide--get-buffer-name ()
-  "Return the Codex session buffer name for the current working directory."
-  (funcall codex-ide-buffer-name-function
-           (codex-ide--get-working-directory)))
+(defun codex-ide--session-for-current-buffer ()
+  "Return the Codex session attached to the current buffer, if any."
+  (and (boundp 'codex-ide--session)
+       (codex-ide-session-p codex-ide--session)
+       codex-ide--session))
+
+(defun codex-ide--next-session-name-suffix (&optional directory)
+  "Return the next available session name suffix for DIRECTORY.
+The first live session in a workspace uses no suffix."
+  (let* ((sessions (codex-ide--sessions-for-directory
+                    (or directory (codex-ide--get-working-directory))
+                    t))
+         (used-suffixes (mapcar #'codex-ide-session-name-suffix sessions))
+         (suffix nil))
+    (while (member suffix used-suffixes)
+      (setq suffix (if suffix (1+ suffix) 1)))
+    suffix))
 
 (defun codex-ide--live-session-p (session)
   "Return non-nil when SESSION is a live `codex-ide-session' object."
@@ -604,10 +643,11 @@ When LIVE-ONLY is non-nil, only include sessions with live processes."
 
 (defun codex-ide--canonical-session-for-directory (&optional directory)
   "Return the canonical Codex session for DIRECTORY.
-For now, the canonical session is the first tracked live session for DIRECTORY."
-  (car (codex-ide--sessions-for-directory
-        (or directory (codex-ide--get-working-directory))
-        t)))
+For now, the canonical session is the earliest created live session for
+DIRECTORY."
+  (car (last (codex-ide--sessions-for-directory
+              (or directory (codex-ide--get-working-directory))
+              t))))
 
 (defun codex-ide--get-session ()
   "Return the Codex session associated with the current working directory."
@@ -623,10 +663,17 @@ For now, the canonical session is the first tracked live session for DIRECTORY."
   "Infer the default Codex session for the current buffer.
 Prefer a session buffer's local session object.  Otherwise fall back to the
 current buffer's project directory."
-  (or (and (boundp 'codex-ide--session)
-           (codex-ide-session-p codex-ide--session)
-           codex-ide--session)
+  (or (codex-ide--session-for-current-buffer)
       (codex-ide--get-session)))
+
+(defun codex-ide--session-for-thread-id (thread-id &optional directory)
+  "Return the live session for THREAD-ID in DIRECTORY, if any."
+  (seq-find
+   (lambda (session)
+     (equal (codex-ide-session-thread-id session) thread-id))
+   (codex-ide--sessions-for-directory
+    (or directory (codex-ide--get-working-directory))
+    t)))
 
 (defun codex-ide--set-session (&optional session)
   "Register SESSION in the global session list."
@@ -2647,10 +2694,19 @@ ACTION is a short past-tense label used in log messages, such as
 (defun codex-ide--create-process-session ()
   "Create a new app-server-backed session for the current working directory."
   (let ((working-dir (codex-ide--get-working-directory)))
-    (let* ((buffer (get-buffer-create (codex-ide--get-buffer-name)))
+    (let* ((name-suffix (codex-ide--next-session-name-suffix working-dir))
+           (buffer (get-buffer-create
+                    (codex-ide--session-buffer-name working-dir name-suffix)))
+           (process-label
+            (if name-suffix
+                (format "%s<%d>"
+                        (file-name-nondirectory (directory-file-name working-dir))
+                        name-suffix)
+              (file-name-nondirectory (directory-file-name working-dir))))
            (process-connection-type nil)
            (session (make-codex-ide-session
                      :directory working-dir
+                     :name-suffix name-suffix
                      :buffer buffer
                      :log-buffer nil
                      :request-counter 0
@@ -2662,16 +2718,14 @@ ACTION is a short past-tense label used in log messages, such as
                      :status "starting"))
            (stderr-process (make-pipe-process
                             :name (format "codex-ide-stderr[%s]"
-                                          (file-name-nondirectory
-                                           (directory-file-name working-dir)))
+                                          process-label)
                             :buffer nil
                             :coding 'utf-8-unix
                             :noquery t
                             :filter #'codex-ide--stderr-filter))
            (process (make-process
                      :name (format "codex-ide[%s]"
-                                   (file-name-nondirectory
-                                    (directory-file-name working-dir)))
+                                   process-label)
                      :buffer nil
                      :command (codex-ide--app-server-command)
                      :coding 'utf-8-unix
@@ -2708,6 +2762,22 @@ ACTION is a short past-tense label used in log messages, such as
        (string-join (codex-ide--app-server-command) " "))
       session)))
 
+(defun codex-ide--show-session-buffer (session)
+  "Display SESSION's buffer and return SESSION."
+  (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))
+  session)
+
+(defun codex-ide--query-session-for-thread-selection (&optional directory)
+  "Return a live session suitable for thread selection in DIRECTORY."
+  (or (let ((session (codex-ide--session-for-current-buffer)))
+        (when (and session
+                   (equal (codex-ide-session-directory session)
+                          (codex-ide--normalize-directory
+                           (or directory (codex-ide--get-working-directory))))
+                   (codex-ide--live-session-p session))
+          session))
+      (codex-ide--canonical-session-for-directory directory)))
+
 (defun codex-ide--start-session (&optional mode)
   "Start a Codex session for the current project.
 MODE can be nil or `new', `continue', or `resume'."
@@ -2718,89 +2788,96 @@ MODE can be nil or `new', `continue', or `resume'."
   (codex-ide-mcp-bridge-prompt-to-enable)
   (codex-ide-mcp-bridge-ensure-server)
   (let* ((working-dir (codex-ide--get-working-directory))
-         (existing-session (codex-ide--get-session))
-         (existing-buffer (and existing-session
-                               (codex-ide-session-buffer existing-session)))
-         (resume-thread nil))
-    (when (and existing-session
-               (not (buffer-live-p existing-buffer)))
-      (codex-ide--teardown-session existing-session t)
-      (setq existing-session nil
-            existing-buffer nil))
-    (when (and (eq (or mode 'new) 'resume)
-               existing-session
-               (process-live-p (codex-ide-session-process existing-session))
-               (buffer-live-p existing-buffer))
-      (setq resume-thread
-            (with-current-buffer existing-buffer
-              (codex-ide--pick-thread
-               existing-session
-               (codex-ide-session-thread-id existing-session))))
-      (codex-ide--teardown-session existing-session t)
-      (setq existing-session nil
-            existing-buffer nil))
-    (if (and existing-session
-             (process-live-p (codex-ide-session-process existing-session))
-             (buffer-live-p existing-buffer))
-        (codex-ide--toggle-existing-window existing-buffer)
-      (let ((session (codex-ide--create-process-session)))
-        (condition-case err
-            (progn
-              (codex-ide-log-message session "Starting session in mode %s" (or mode 'new))
-              (codex-ide-mcp-bridge-ensure-server)
-              (codex-ide--initialize-session session)
-              (pcase (or mode 'new)
-                ('new
-                 (let ((result (codex-ide--request-sync
-                                session
-                                "thread/start"
-                                (with-current-buffer (codex-ide-session-buffer session)
-                                  (codex-ide--thread-start-params)))))
-                   (setf (codex-ide-session-thread-id session)
-                         (codex-ide--extract-thread-id result))
-                   (codex-ide-log-message
-                    session
-                    "Started new thread %s"
-                    (codex-ide-session-thread-id session))))
-                ('continue
-                 (let* ((thread (or (with-current-buffer (codex-ide-session-buffer session)
-                                      (codex-ide--latest-thread session))
-                                    (user-error "No Codex threads found for %s"
-                                                (abbreviate-file-name working-dir))))
-                        (thread-id (alist-get 'id thread)))
-                   (codex-ide--resume-thread-into-session
-                    session thread-id "Continued")))
-                ('resume
-                 (let* ((thread (or resume-thread
-                                    (with-current-buffer (codex-ide-session-buffer session)
-                                      (codex-ide--pick-thread session))))
-                        (thread-id (alist-get 'id thread)))
-                   (codex-ide--resume-thread-into-session
-                    session thread-id "Resumed"))))
-              (setf (codex-ide-session-status session) "idle")
-              (codex-ide--update-header-line session)
-              (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))
-              (codex-ide--track-active-buffer)
-              (codex-ide--insert-input-prompt session)
-              (message "Codex started in %s"
-                       (file-name-nondirectory (directory-file-name working-dir)))
-              session)
-          (error
-           (codex-ide-log-message session "Session startup failed: %s" (error-message-string err))
-           (when (process-live-p (codex-ide-session-process session))
-             (delete-process (codex-ide-session-process session)))
-           (when (buffer-live-p (codex-ide-session-buffer session))
-             (kill-buffer (codex-ide-session-buffer session)))
-           (codex-ide--cleanup-session session)
-           (signal (car err) (cdr err)))
-          (quit
-           (codex-ide-log-message session "Session startup aborted")
-           (when (process-live-p (codex-ide-session-process session))
-             (delete-process (codex-ide-session-process session)))
-           (when (buffer-live-p (codex-ide-session-buffer session))
-             (kill-buffer (codex-ide-session-buffer session)))
-           (codex-ide--cleanup-session session)
-           (signal 'quit nil)))))))
+         (mode (or mode 'new))
+         (query-session nil)
+         (session nil)
+         (created-session nil)
+         (reused-session nil)
+         (thread nil)
+         (thread-id nil)
+         (omit-thread-id (and (eq mode 'resume)
+                              (when-let ((current-session
+                                          (codex-ide--session-for-current-buffer)))
+                                (codex-ide-session-thread-id current-session)))))
+    (condition-case err
+        (progn
+          (unless (eq mode 'new)
+            (setq query-session (codex-ide--query-session-for-thread-selection working-dir))
+            (unless query-session
+              (setq query-session (codex-ide--create-process-session)
+                    created-session query-session)
+              (codex-ide-log-message query-session "Starting session in mode %s" mode)
+              (codex-ide--initialize-session query-session))
+            (setq thread
+                  (pcase mode
+                    ('continue
+                     (or (with-current-buffer (codex-ide-session-buffer query-session)
+                           (codex-ide--latest-thread query-session))
+                         (user-error "No Codex threads found for %s"
+                                     (abbreviate-file-name working-dir))))
+                    ('resume
+                     (with-current-buffer (codex-ide-session-buffer query-session)
+                       (codex-ide--pick-thread query-session omit-thread-id)))))
+            (setq thread-id (alist-get 'id thread))
+            (when-let ((existing-session
+                        (codex-ide--session-for-thread-id thread-id working-dir)))
+              (setq reused-session existing-session)))
+          (if reused-session
+              (progn
+                (message "Showing Codex session for thread %s" thread-id)
+                (codex-ide--show-session-buffer reused-session))
+            (setq session (or created-session
+                              (codex-ide--create-process-session))
+                  created-session session)
+            (codex-ide-log-message session "Starting session in mode %s" mode)
+            (unless (eq session query-session)
+              (codex-ide--initialize-session session))
+            (pcase mode
+              ('new
+               (let ((result (codex-ide--request-sync
+                              session
+                              "thread/start"
+                              (with-current-buffer (codex-ide-session-buffer session)
+                                (codex-ide--thread-start-params)))))
+                 (setf (codex-ide-session-thread-id session)
+                       (codex-ide--extract-thread-id result))
+                 (codex-ide-log-message
+                  session
+                  "Started new thread %s"
+                  (codex-ide-session-thread-id session))))
+              ((or 'continue 'resume)
+               (codex-ide--resume-thread-into-session
+                session
+                thread-id
+                (if (eq mode 'continue) "Continued" "Resumed"))))
+            (setf (codex-ide-session-status session) "idle")
+            (codex-ide--update-header-line session)
+            (codex-ide--show-session-buffer session)
+            (codex-ide--track-active-buffer)
+            (codex-ide--insert-input-prompt session)
+            (message "Codex started in %s"
+                     (file-name-nondirectory (directory-file-name working-dir)))
+            session))
+      (error
+       (when created-session
+         (codex-ide-log-message created-session
+                                "Session startup failed: %s"
+                                (error-message-string err))
+         (when (process-live-p (codex-ide-session-process created-session))
+           (delete-process (codex-ide-session-process created-session)))
+         (when (buffer-live-p (codex-ide-session-buffer created-session))
+           (kill-buffer (codex-ide-session-buffer created-session)))
+         (codex-ide--cleanup-session created-session))
+       (signal (car err) (cdr err)))
+      (quit
+       (when created-session
+         (codex-ide-log-message created-session "Session startup aborted")
+         (when (process-live-p (codex-ide-session-process created-session))
+           (delete-process (codex-ide-session-process created-session)))
+         (when (buffer-live-p (codex-ide-session-buffer created-session))
+           (kill-buffer (codex-ide-session-buffer created-session)))
+         (codex-ide--cleanup-session created-session))
+       (signal 'quit nil)))))
 
 (defun codex-ide--toggle-existing-window (buffer)
   "Toggle BUFFER visibility."
@@ -3298,11 +3375,14 @@ If no live session exists, prompt to start one."
 
 ;;;###autoload
 (defun codex-ide-stop ()
-  "Stop the Codex session for the current project or directory."
+  "Stop the Codex session associated with the current session buffer."
   (interactive)
-  (let* ((working-dir (codex-ide--get-working-directory))
-         (session (codex-ide--get-session))
+  (let* ((session (and (derived-mode-p 'codex-ide-session-mode)
+                       (codex-ide--session-for-current-buffer)))
+         (working-dir (and session (codex-ide-session-directory session)))
          (buffer (and session (codex-ide-session-buffer session))))
+    (unless session
+      (user-error "Codex stop is only available in a Codex session buffer"))
     (cond
      ((and session (process-live-p (codex-ide-session-process session)))
       (when (codex-ide-session-thread-id session)
@@ -3332,7 +3412,7 @@ If no live session exists, prompt to start one."
       (message "Removed stale Codex buffer in %s"
                (file-name-nondirectory (directory-file-name working-dir))))
      (t
-      (message "No Codex session is running in this directory")))))
+      (message "No Codex session is running in this buffer")))))
 
 ;;;###autoload
 (defun codex-ide-switch-to-buffer ()
@@ -3350,7 +3430,7 @@ If no live session exists, prompt to start one."
   (let (sessions)
     (dolist (session codex-ide--sessions)
       (when (buffer-live-p (codex-ide-session-buffer session))
-        (push (cons (abbreviate-file-name (codex-ide-session-directory session))
+        (push (cons (buffer-name (codex-ide-session-buffer session))
                     session)
               sessions)))
     (if sessions

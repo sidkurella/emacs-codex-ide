@@ -90,7 +90,7 @@ Resume the most recent Codex session for the current directory." t)
 (autoload 'codex-ide-check-status "codex-ide" "\
 Report Codex CLI availability and version." t)
 (autoload 'codex-ide-stop "codex-ide" "\
-Stop the Codex session for the current project or directory." t)
+Stop the Codex session associated with the current session buffer." t)
 (autoload 'codex-ide-switch-to-buffer "codex-ide" "\
 Show the Codex buffer for the current project." t)
 (autoload 'codex-ide-list-session-buffers "codex-ide" "\
