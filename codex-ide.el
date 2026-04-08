@@ -3363,6 +3363,50 @@ If no live session exists, prompt to start one."
   (codex-ide--start-session 'new))
 
 ;;;###autoload
+(defun codex-ide-start-replace-existing ()
+  "Start a new Codex thread in the current session buffer."
+  (interactive)
+  (let ((session (and (derived-mode-p 'codex-ide-session-mode)
+                      (codex-ide--session-for-current-buffer))))
+    (unless session
+      (user-error "Start new (replace existing) is only available in a Codex session buffer"))
+    (when (codex-ide-session-current-turn-id session)
+      (user-error "A Codex turn is already running"))
+    (let ((working-dir (codex-ide-session-directory session))
+          (current-thread-id (codex-ide-session-thread-id session)))
+      (when current-thread-id
+        (codex-ide-log-message
+         session
+         "Unsubscribing thread %s before start-replace"
+         current-thread-id)
+        (ignore-errors
+          (codex-ide--request-sync
+           session
+           "thread/unsubscribe"
+           `((threadId . ,current-thread-id)))))
+      (setf (codex-ide-session-thread-id session) nil
+            (codex-ide-session-last-sent-buffer-context session) nil)
+      (codex-ide--reset-session-buffer session)
+      (let ((result (codex-ide--request-sync
+                     session
+                     "thread/start"
+                     (with-current-buffer (codex-ide-session-buffer session)
+                       (codex-ide--thread-start-params)))))
+        (setf (codex-ide-session-thread-id session)
+              (codex-ide--extract-thread-id result))
+        (codex-ide-log-message
+         session
+         "Started replacement thread %s"
+         (codex-ide-session-thread-id session)))
+      (setf (codex-ide-session-status session) "idle")
+      (codex-ide--update-header-line session)
+      (codex-ide--show-session-buffer session)
+      (codex-ide--insert-input-prompt session)
+      (message "Codex started in %s"
+               (file-name-nondirectory (directory-file-name working-dir)))
+      session)))
+
+;;;###autoload
 (defun codex-ide-resume ()
   "Resume a Codex session using an Emacs picker."
   (interactive)

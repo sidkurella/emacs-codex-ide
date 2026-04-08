@@ -274,6 +274,13 @@
         (setq-local default-directory (file-name-as-directory project-dir))
         (should-error (codex-ide-resume-replace-existing) :type 'user-error)))))
 
+(ert-deftest codex-ide-start-replace-existing-errors-outside-session-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (with-temp-buffer
+        (setq-local default-directory (file-name-as-directory project-dir))
+        (should-error (codex-ide-start-replace-existing) :type 'user-error)))))
+
 (ert-deftest codex-ide-start-from-menu-starts-when-no-session-exists ()
   (let ((started nil))
     (cl-letf (((symbol-function 'codex-ide)
@@ -297,6 +304,15 @@
                  (ert-fail "Start-from-menu should not prompt for confirmation"))))
       (should (eq (codex-ide--start-from-menu) 'started))
       (should started))))
+
+(ert-deftest codex-ide-start-replace-existing-from-menu-invokes-core-command ()
+  (let ((called nil))
+    (cl-letf (((symbol-function 'codex-ide-start-replace-existing)
+               (lambda ()
+                 (setq called t)
+                 'started)))
+      (should (eq (codex-ide--start-replace-existing-from-menu) 'started))
+      (should called))))
 
 (ert-deftest codex-ide-continue-from-menu-always-invokes-continue ()
   (let ((called nil))

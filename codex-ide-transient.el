@@ -12,6 +12,7 @@
 (declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide "codex-ide" ())
+(declare-function codex-ide-start-replace-existing "codex-ide" ())
 (declare-function codex-ide-resume "codex-ide" ())
 (declare-function codex-ide-resume-replace-existing "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
@@ -78,6 +79,11 @@
   "Start a new Codex session."
   (interactive)
   (codex-ide))
+
+(defun codex-ide--start-replace-existing-from-menu ()
+  "Start a new Codex session in the current session buffer."
+  (interactive)
+  (codex-ide-start-replace-existing))
 
 (defun codex-ide--resume-from-menu ()
   "Resume Codex using the thread picker."
@@ -223,6 +229,8 @@
   ["Codex IDE"
    ["Session"
     ("s" codex-ide--start-from-menu :description codex-ide--start-description)
+    ("S" "Start new (replace existing)" codex-ide--start-replace-existing-from-menu
+     :if codex-ide--in-session-buffer-p)
     ("c" codex-ide--continue-from-menu :description codex-ide--continue-description)
     ("r" codex-ide--resume-from-menu :description codex-ide--resume-description)
     ("R" "Resume (replace existing)" codex-ide-resume-replace-existing
