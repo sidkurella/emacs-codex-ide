@@ -243,8 +243,8 @@ When nil, never include active-buffer context automatically."
 (defvar codex-ide--cli-available nil
   "Whether the Codex CLI has been detected successfully.")
 
-(defvar codex-ide--sessions (make-hash-table :test 'equal)
-  "Hash table mapping working directories to active Codex sessions.")
+(defvar codex-ide--sessions nil
+  "List of active Codex session objects.")
 
 (defvar codex-ide--last-accessed-buffer nil
   "Most recently displayed Codex session buffer.")
@@ -254,9 +254,6 @@ When nil, never include active-buffer context automatically."
 
 (defvar codex-ide--active-buffer-objects (make-hash-table :test 'equal)
   "Hash table mapping working directories to the latest live Emacs file buffer.")
-
-(defvar codex-ide--last-sent-buffer-contexts (make-hash-table :test 'equal)
-  "Hash table mapping working directories to the last context sent to Codex.")
 
 (defvar codex-ide--prompt-origin-buffer nil
   "Buffer to treat as the authoritative prompt context for one submission.")
@@ -350,6 +347,10 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initarg :prompt-history-draft
     :initform nil
     :accessor codex-ide-session-prompt-history-draft)
+   (last-sent-buffer-context
+    :initarg :last-sent-buffer-context
+    :initform nil
+    :accessor codex-ide-session-last-sent-buffer-context)
    (interrupt-requested
     :initarg :interrupt-requested
     :initform nil
@@ -584,10 +585,34 @@ Add this variable to `savehist-additional-variables' to persist it.")
   (funcall codex-ide-buffer-name-function
            (codex-ide--get-working-directory)))
 
+(defun codex-ide--live-session-p (session)
+  "Return non-nil when SESSION is a live `codex-ide-session' object."
+  (and (codex-ide-session-p session)
+       (process-live-p (codex-ide-session-process session))))
+
+(defun codex-ide--sessions-for-directory (directory &optional live-only)
+  "Return tracked sessions for DIRECTORY.
+When LIVE-ONLY is non-nil, only include sessions with live processes."
+  (let ((directory (codex-ide--normalize-directory directory)))
+    (seq-filter
+     (lambda (session)
+       (and (codex-ide-session-p session)
+            (equal (codex-ide-session-directory session) directory)
+            (or (not live-only)
+                (codex-ide--live-session-p session))))
+     codex-ide--sessions)))
+
+(defun codex-ide--canonical-session-for-directory (&optional directory)
+  "Return the canonical Codex session for DIRECTORY.
+For now, the canonical session is the first tracked live session for DIRECTORY."
+  (car (codex-ide--sessions-for-directory
+        (or directory (codex-ide--get-working-directory))
+        t)))
+
 (defun codex-ide--get-session ()
   "Return the Codex session associated with the current working directory."
-  (gethash (codex-ide--get-working-directory)
-           codex-ide--sessions))
+  (codex-ide--canonical-session-for-directory
+   (codex-ide--get-working-directory)))
 
 (defun codex-ide--get-process ()
   "Return the Codex process associated with the current working directory."
@@ -604,23 +629,17 @@ current buffer's project directory."
       (codex-ide--get-session)))
 
 (defun codex-ide--set-session (&optional session)
-  "Associate SESSION with the current working directory."
+  "Register SESSION in the global session list."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (puthash (codex-ide--get-working-directory)
-           session
-           codex-ide--sessions))
+  (setq codex-ide--sessions (delq session codex-ide--sessions))
+  (push session codex-ide--sessions)
+  session)
 
 (defun codex-ide--has-live-sessions-p ()
   "Return non-nil when any tracked Codex session still has a live process."
-  (let ((found nil))
-    (maphash
-     (lambda (_directory session)
-       (when (process-live-p (codex-ide-session-process session))
-         (setq found t)))
-     codex-ide--sessions)
-    found))
+  (seq-some #'codex-ide--live-session-p codex-ide--sessions))
 
 (define-minor-mode codex-ide-track-active-buffer-mode
   "Globally track the active Emacs file buffer for Codex sessions."
@@ -647,12 +666,17 @@ current buffer's project directory."
 
 (defun codex-ide--cleanup-dead-sessions ()
   "Remove stale sessions from `codex-ide--sessions'."
-  (maphash
-   (lambda (directory session)
-     (unless (process-live-p (codex-ide-session-process session))
-       (codex-ide-log-message session "Cleaning up dead session entry for %s" directory)
-       (remhash directory codex-ide--sessions)))
-   codex-ide--sessions)
+  (setq codex-ide--sessions
+        (seq-filter
+         (lambda (session)
+           (if (codex-ide--live-session-p session)
+               t
+             (codex-ide-log-message
+              session
+              "Cleaning up dead session entry for %s"
+              (codex-ide-session-directory session))
+             nil))
+         codex-ide--sessions))
   (codex-ide--maybe-disable-active-buffer-tracking))
 
 (defun codex-ide--cleanup-session (&optional session)
@@ -668,10 +692,9 @@ current buffer's project directory."
       (setf (codex-ide-session-stderr-process session) nil))
     (when session
       (remhash session codex-ide--session-metadata))
-    (remhash directory codex-ide--sessions)
+    (setq codex-ide--sessions (delq session codex-ide--sessions))
     (remhash directory codex-ide--active-buffer-contexts)
     (remhash directory codex-ide--active-buffer-objects)
-    (remhash directory codex-ide--last-sent-buffer-contexts)
     (codex-ide--maybe-disable-active-buffer-tracking)))
 
 (defun codex-ide--teardown-session (session &optional kill-log-buffer)
@@ -701,11 +724,9 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
 
 (defun codex-ide--cleanup-all-sessions ()
   "Terminate all active Codex sessions."
-  (maphash
-   (lambda (_directory session)
-     (when (process-live-p (codex-ide-session-process session))
-       (delete-process (codex-ide-session-process session))))
-   codex-ide--sessions))
+  (dolist (session codex-ide--sessions)
+    (when (process-live-p (codex-ide-session-process session))
+      (delete-process (codex-ide-session-process session)))))
 
 (add-hook 'kill-emacs-hook #'codex-ide--cleanup-all-sessions)
 
@@ -1347,7 +1368,7 @@ This cache is maintained even when no Codex session is currently active."
               (working-dir (alist-get 'project-dir context)))
     (puthash working-dir context codex-ide--active-buffer-contexts)
     (puthash working-dir buffer codex-ide--active-buffer-objects)
-    (when-let ((session (gethash working-dir codex-ide--sessions)))
+    (when-let ((session (codex-ide--canonical-session-for-directory working-dir)))
       (when (process-live-p (codex-ide-session-process session))
         (codex-ide--update-header-line session)))))
 
@@ -1370,7 +1391,7 @@ When BUFFER is nil, use the current buffer."
         (let ((working-dir (alist-get 'project-dir context)))
           (puthash working-dir context codex-ide--active-buffer-contexts)
           (puthash working-dir target codex-ide--active-buffer-objects)
-          (when-let ((session (gethash working-dir codex-ide--sessions)))
+          (when-let ((session (codex-ide--canonical-session-for-directory working-dir)))
             (when (process-live-p (codex-ide-session-process session))
               (codex-ide--update-header-line session))))))))
 
@@ -2067,7 +2088,8 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
 (defun codex-ide--context-payload-for-prompt ()
   "Return context payload metadata for the current prompt, or nil.
 The result is an alist with `formatted' and `summary' entries."
-  (let ((working-dir (codex-ide--get-working-directory)))
+  (let ((working-dir (codex-ide--get-working-directory))
+        (session (codex-ide--get-default-session-for-current-buffer)))
     (when-let* ((context-buffer (or codex-ide--prompt-origin-buffer
                                     (codex-ide--get-active-buffer-object)))
                 (context (or (and codex-ide--prompt-origin-buffer
@@ -2085,12 +2107,16 @@ The result is an alist with `formatted' and `summary' entries."
               (codex-ide--format-buffer-context-summary context-with-selection)))
         (pcase codex-ide-include-active-buffer-context
           ('always
-           (puthash working-dir context codex-ide--last-sent-buffer-contexts)
+           (when session
+             (setf (codex-ide-session-last-sent-buffer-context session) context))
            `((formatted . ,formatted-context)
              (summary . ,context-summary)))
           ('when-changed
-           (unless (equal context (gethash working-dir codex-ide--last-sent-buffer-contexts))
-             (puthash working-dir context codex-ide--last-sent-buffer-contexts)
+           (unless (equal context
+                          (and session
+                               (codex-ide-session-last-sent-buffer-context session)))
+             (when session
+               (setf (codex-ide-session-last-sent-buffer-context session) context))
              `((formatted . ,formatted-context)
                (summary . ,context-summary))))
           (_ nil))))))
@@ -3322,11 +3348,11 @@ If no live session exists, prompt to start one."
   (interactive)
   (codex-ide--cleanup-dead-sessions)
   (let (sessions)
-    (maphash
-     (lambda (directory session)
-       (when (buffer-live-p (codex-ide-session-buffer session))
-         (push (cons (abbreviate-file-name directory) session) sessions)))
-     codex-ide--sessions)
+    (dolist (session codex-ide--sessions)
+      (when (buffer-live-p (codex-ide-session-buffer session))
+        (push (cons (abbreviate-file-name (codex-ide-session-directory session))
+                    session)
+              sessions)))
     (if sessions
         (let* ((choice (completing-read "Switch to Codex session buffer: "
                                         sessions nil t))
@@ -3470,7 +3496,7 @@ If no live session exists for the current buffer, prompt to start one first."
      ((codex-ide-session-current-turn-id session)
       (user-error "A Codex turn is already running"))
      (t
-      (puthash working-dir context codex-ide--last-sent-buffer-contexts)
+      (setf (codex-ide-session-last-sent-buffer-context session) context)
       (codex-ide-log-message
        session
        "Sending active buffer context for %s"
@@ -3498,14 +3524,12 @@ If no live session exists for the current buffer, prompt to start one first."
   "Toggle the most recently used Codex window globally."
   (interactive)
   (let ((found-visible nil))
-    (maphash
-     (lambda (_directory session)
-       (let ((buffer (codex-ide-session-buffer session)))
-         (when (and (buffer-live-p buffer)
-                    (get-buffer-window buffer))
-           (codex-ide--toggle-existing-window buffer)
-           (setq found-visible t))))
-     codex-ide--sessions)
+    (dolist (session codex-ide--sessions)
+      (let ((buffer (codex-ide-session-buffer session)))
+        (when (and (buffer-live-p buffer)
+                   (get-buffer-window buffer))
+          (codex-ide--toggle-existing-window buffer)
+          (setq found-visible t))))
     (cond
      (found-visible
       (message "Closed all Codex windows"))

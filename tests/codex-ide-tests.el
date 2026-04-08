@@ -40,9 +40,9 @@
           (should (string= (codex-ide-session-directory session)
                            (directory-file-name (file-truename project-dir))))
           (should (codex-ide-test-process-p (codex-ide-session-process session)))
+          (should (memq session codex-ide--sessions))
           (should (eq session
-                      (gethash (directory-file-name (file-truename project-dir))
-                               codex-ide--sessions)))
+                      (codex-ide--canonical-session-for-directory project-dir)))
           (with-current-buffer (codex-ide-session-buffer session)
             (should (derived-mode-p 'codex-ide-session-mode))
             (should visual-line-mode)
@@ -60,6 +60,24 @@
                               (codex-ide-session-process session))
                              'codex-session)
                   session)))))))
+
+(ert-deftest codex-ide-sessions-for-directory-returns-live-sessions-in-registry-order ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((first (codex-ide--create-process-session))
+              second)
+          (setq second (codex-ide--create-process-session))
+          (should (equal (codex-ide--sessions-for-directory project-dir t)
+                         (list second first)))
+          (should (eq (codex-ide--canonical-session-for-directory project-dir)
+                      second))
+          (delete-process (codex-ide-session-process second))
+          (codex-ide--cleanup-dead-sessions)
+          (should (equal (codex-ide--sessions-for-directory project-dir t)
+                         (list first)))
+          (should (eq (codex-ide--canonical-session-for-directory project-dir)
+                      first)))))))
 
 (ert-deftest codex-ide-session-mode-enables-visual-line-mode-by-default ()
   (with-temp-buffer
@@ -342,25 +360,31 @@
          (file-path (codex-ide-test--make-project-file
                      project-dir "src/example.el" "(message \"hello\")\n")))
     (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-include-active-buffer-context 'when-changed))
-        (with-current-buffer (find-file-noselect file-path)
-          (goto-char (point-min))
-          (forward-line 0)
-          (move-to-column 3)
-          (let ((context (codex-ide--make-buffer-context)))
-            (puthash (alist-get 'project-dir context)
-                     context
-                     codex-ide--active-buffer-contexts)
-            (let* ((first-item (aref (codex-ide--compose-turn-input "Explain this") 0))
-                   (second-item (aref (codex-ide--compose-turn-input "Explain again") 0))
-                   (first-text (alist-get 'text first-item))
-                   (second-text (alist-get 'text second-item)))
-              (should (string-match-p "\\[Emacs context\\]" first-text))
-              (should (string-match-p "\\[/Emacs context\\]" first-text))
-              (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el"
-                                      first-text))
-              (should-not (string-match-p "\\[Emacs context\\]" second-text))
-              (should (string= second-text "Explain again")))))))))
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-include-active-buffer-context 'when-changed)
+              (session (codex-ide--create-process-session)))
+          (with-current-buffer (find-file-noselect file-path)
+            (setq-local default-directory (file-name-as-directory project-dir))
+            (goto-char (point-min))
+            (forward-line 0)
+            (move-to-column 3)
+            (let ((context (codex-ide--make-buffer-context)))
+              (puthash (alist-get 'project-dir context)
+                       context
+                       codex-ide--active-buffer-contexts)
+              (let ((codex-ide--session session))
+                (let* ((first-item (aref (codex-ide--compose-turn-input "Explain this") 0))
+                       (second-item (aref (codex-ide--compose-turn-input "Explain again") 0))
+                       (first-text (alist-get 'text first-item))
+                       (second-text (alist-get 'text second-item)))
+                  (should (string-match-p "\\[Emacs context\\]" first-text))
+                  (should (string-match-p "\\[/Emacs context\\]" first-text))
+                  (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el"
+                                          first-text))
+                  (should-not (string-match-p "\\[Emacs context\\]" second-text))
+                  (should (string= second-text "Explain again"))
+                  (should (equal (codex-ide-session-last-sent-buffer-context session)
+                                 context)))))))))))
 
 (ert-deftest codex-ide-compose-turn-input-includes-selected-region-when-active ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
