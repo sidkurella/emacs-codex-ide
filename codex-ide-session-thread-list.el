@@ -12,6 +12,13 @@
 (defvar-local codex-ide-session-thread-list--directory nil
   "Workspace directory displayed by the current thread list buffer.")
 
+(defvar codex-ide-session-thread-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map codex-ide-session-list-mode-map)
+    (define-key map (kbd "l") #'codex-ide-session-thread-list-redisplay)
+    map)
+  "Keymap for `codex-ide-session-thread-list-mode'.")
+
 (define-derived-mode codex-ide-session-thread-list-mode codex-ide-session-list-mode
   "Codex-Threads"
   "Mode for listing stored Codex threads in one workspace.")
@@ -53,22 +60,40 @@
        (let ((thread-id (alist-get 'id thread)))
          (list thread-id
                (vector
-                (codex-ide--thread-choice-short-id thread)
-                (codex-ide-session-thread-list--preview-text thread)
-                (codex-ide-session-thread-list--thread-status thread directory)
-                (codex-ide--format-thread-updated-at
-                 (alist-get 'updatedAt thread))
-                (codex-ide--format-thread-updated-at
-                 (alist-get 'createdAt thread))
-                (or (codex-ide-session-thread-list--thread-buffer-name
-                     thread directory)
-                    "")))))
+                (codex-ide-session-list-cell
+                 (codex-ide--thread-choice-short-id thread)
+                 'codex-ide-session-list-id-face)
+                (codex-ide-session-list-cell
+                 (codex-ide-session-thread-list--preview-text thread)
+                 'codex-ide-session-list-primary-face)
+                (codex-ide-session-list-cell
+                 (codex-ide-session-thread-list--thread-status thread directory)
+                 'codex-ide-session-list-status-face)
+                (codex-ide-session-list-cell
+                 (codex-ide--format-thread-updated-at
+                  (alist-get 'updatedAt thread))
+                 'codex-ide-session-list-time-face)
+                (codex-ide-session-list-cell
+                 (codex-ide--format-thread-updated-at
+                  (alist-get 'createdAt thread))
+                 'codex-ide-session-list-time-face)
+                (codex-ide-session-list-cell
+                 (or (codex-ide-session-thread-list--thread-buffer-name
+                      thread directory)
+                     "")
+                 'codex-ide-session-list-secondary-face)))))
      threads)))
 
 (defun codex-ide-session-thread-list--visit (thread-id)
   "Visit THREAD-ID in the current thread list workspace."
   (codex-ide--prepare-session-operations)
   (codex-ide--show-or-resume-thread thread-id codex-ide-session-thread-list--directory))
+
+(defun codex-ide-session-thread-list-redisplay ()
+  "Regenerate the workspace thread list using current thread state."
+  (interactive)
+  (codex-ide--prepare-session-operations)
+  (tabulated-list-print t))
 
 ;;;###autoload
 (defun codex-ide-session-thread-list ()

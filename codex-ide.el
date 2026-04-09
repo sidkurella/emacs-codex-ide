@@ -1639,6 +1639,30 @@ Optionally seed it with INITIAL-TEXT."
             (goto-char (point-max)))
           (codex-ide--sync-prompt-minor-mode session))))))
 
+(defun codex-ide--input-prompt-active-p (&optional session)
+  "Return non-nil when SESSION currently has an editable input prompt."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((buffer (and session (codex-ide-session-buffer session)))
+        (overlay (and session (codex-ide-session-input-overlay session)))
+        (marker (and session (codex-ide-session-input-start-marker session))))
+    (and (buffer-live-p buffer)
+         (overlayp overlay)
+         (eq (overlay-buffer overlay) buffer)
+         (markerp marker)
+         (eq (marker-buffer marker) buffer))))
+
+(defun codex-ide--ensure-input-prompt (&optional session initial-text)
+  "Insert an editable prompt for SESSION when one is not already active.
+When INITIAL-TEXT is non-nil, seed a newly inserted prompt with it."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (when (and (string= (codex-ide-session-status session) "idle")
+             (not (codex-ide-session-current-turn-id session))
+             (not (codex-ide-session-output-prefix-inserted session))
+             (not (codex-ide--input-prompt-active-p session)))
+    (codex-ide--insert-input-prompt session initial-text)))
+
 (defun codex-ide--current-input (&optional session)
   "Return the current editable input text for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -2820,6 +2844,7 @@ ACTION is a short past-tense label used in log messages, such as
 (defun codex-ide--show-session-buffer (session)
   "Display SESSION's buffer and return SESSION."
   (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))
+  (codex-ide--ensure-input-prompt session)
   session)
 
 (defun codex-ide--reset-session-buffer (session)
@@ -2880,13 +2905,30 @@ ACTION is a short past-tense label used in log messages, such as
       (codex-ide--initialize-session session))
     session))
 
+(defun codex-ide--reusable-idle-session-for-directory (&optional directory)
+  "Return an idle live session without a thread in DIRECTORY, if any."
+  (let ((directory (codex-ide--normalize-directory
+                    (or directory (codex-ide--get-working-directory)))))
+    (seq-find
+     (lambda (session)
+       (and (codex-ide--live-session-p session)
+            (equal (codex-ide-session-directory session) directory)
+            (not (codex-ide-session-thread-id session))
+            (string= (codex-ide-session-status session) "idle")))
+     (codex-ide--sessions-for-directory directory t))))
+
 (defun codex-ide--show-or-resume-thread (thread-id &optional directory)
   "Show THREAD-ID in DIRECTORY, resuming it into a session when needed."
   (let* ((directory (codex-ide--normalize-directory
                      (or directory (codex-ide--get-working-directory))))
-         (session (codex-ide--session-for-thread-id thread-id directory)))
+         (session (or (codex-ide--session-for-thread-id thread-id directory)
+                      (codex-ide--reusable-idle-session-for-directory directory))))
     (if session
         (progn
+          (when (not (codex-ide-session-thread-id session))
+            (codex-ide--reset-session-buffer session)
+            (codex-ide--resume-thread-into-session session thread-id "Resumed")
+            (codex-ide--update-header-line session))
           (codex-ide--show-session-buffer session)
           session)
       (let ((default-directory directory))
@@ -2895,7 +2937,7 @@ ACTION is a short past-tense label used in log messages, such as
       (codex-ide--resume-thread-into-session session thread-id "Resumed")
       (codex-ide--update-header-line session)
       (codex-ide--show-session-buffer session)
-      (codex-ide--insert-input-prompt session)
+      (codex-ide--ensure-input-prompt session)
       session)))
 
 (defun codex-ide--start-session (&optional mode)
@@ -2947,6 +2989,9 @@ MODE can be nil or `new', `continue', or `resume'."
             (codex-ide-log-message session "Starting session in mode %s" mode)
             (unless (eq session query-session)
               (codex-ide--initialize-session session))
+            (when (and (eq session query-session)
+                       (memq mode '(continue resume)))
+              (codex-ide--reset-session-buffer session))
             (pcase mode
               ('new
                (let ((result (codex-ide--request-sync
@@ -2971,7 +3016,7 @@ MODE can be nil or `new', `continue', or `resume'."
             (codex-ide--show-session-buffer session)
             (codex-ide--track-active-buffer)
             (unless (codex-ide-session-output-prefix-inserted session)
-              (codex-ide--insert-input-prompt session))
+              (codex-ide--ensure-input-prompt session))
             (message "Codex started in %s"
                      (file-name-nondirectory (directory-file-name working-dir)))
             session))
@@ -3487,7 +3532,7 @@ If no live session exists, prompt to start one."
       (setf (codex-ide-session-status session) "idle")
       (codex-ide--update-header-line session)
       (codex-ide--show-session-buffer session)
-      (codex-ide--insert-input-prompt session)
+      (codex-ide--ensure-input-prompt session)
       (message "Codex started in %s"
                (file-name-nondirectory (directory-file-name working-dir)))
       session)))
@@ -3540,7 +3585,7 @@ If no live session exists, prompt to start one."
           (codex-ide--resume-thread-into-session session thread-id "Resumed")
           (codex-ide--update-header-line session)
           (codex-ide--show-session-buffer session)
-          (codex-ide--insert-input-prompt session)
+          (codex-ide--ensure-input-prompt session)
           (message "Codex resumed in %s"
                    (file-name-nondirectory (directory-file-name working-dir)))
           session)
@@ -3647,7 +3692,7 @@ If no live session exists, prompt to start one."
         (let* ((choice (completing-read "Switch to Codex session buffer: "
                                         sessions nil t))
                (session (alist-get choice sessions nil nil #'string=)))
-          (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session)))
+          (codex-ide--show-session-buffer session))
       (message "No active Codex session buffers"))))
 
 ;;;###autoload

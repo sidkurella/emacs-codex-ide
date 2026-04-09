@@ -12,6 +12,14 @@
 (defvar-local codex-ide-session-buffer-list--sessions nil
   "Sessions shown in the current Codex session buffer list.")
 
+(defvar codex-ide-session-buffer-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map codex-ide-session-list-mode-map)
+    (define-key map (kbd "D") #'codex-ide-session-buffer-list-delete-buffer)
+    (define-key map (kbd "l") #'codex-ide-session-buffer-list-redisplay)
+    map)
+  "Keymap for `codex-ide-session-buffer-list-mode'.")
+
 (define-derived-mode codex-ide-session-buffer-list-mode codex-ide-session-list-mode
   "Codex-Buffers"
   "Mode for listing live Codex session buffers.")
@@ -25,21 +33,51 @@
                               (buffer-name (codex-ide-session-buffer right))))))
   (mapcar
    (lambda (session)
-     (let* ((buffer (codex-ide-session-buffer session))
+       (let* ((buffer (codex-ide-session-buffer session))
             (directory (abbreviate-file-name (codex-ide-session-directory session)))
             (thread-id (or (codex-ide-session-thread-id session) ""))
             (status (codex-ide--status-label (codex-ide-session-status session))))
        (list session
-             (vector (buffer-name buffer)
-                     directory
-                     thread-id
-                     status))))
+             (vector (codex-ide-session-list-cell
+                      (buffer-name buffer)
+                      'codex-ide-session-list-primary-face)
+                     (codex-ide-session-list-cell
+                      directory
+                      'codex-ide-session-list-secondary-face)
+                     (codex-ide-session-list-cell
+                      thread-id
+                      'codex-ide-session-list-id-face)
+                     (codex-ide-session-list-cell
+                      status
+                      'codex-ide-session-list-status-face)))))
    codex-ide-session-buffer-list--sessions))
 
 (defun codex-ide-session-buffer-list--visit (session)
   "Visit SESSION's buffer."
   (when (buffer-live-p (codex-ide-session-buffer session))
-    (codex-ide--display-buffer-in-codex-window (codex-ide-session-buffer session))))
+    (codex-ide--show-session-buffer session)))
+
+(defun codex-ide-session-buffer-list-delete-buffer ()
+  "Kill the session buffer for the row at point and refresh the list."
+  (interactive)
+  (let* ((session (tabulated-list-get-id))
+         (buffer (and (codex-ide-session-p session)
+                      (codex-ide-session-buffer session)))
+         (buffer-name (and (buffer-live-p buffer)
+                           (buffer-name buffer))))
+    (unless session
+      (user-error "No list entry at point"))
+    (unless (buffer-live-p buffer)
+      (user-error "Session buffer is no longer live"))
+    (when (y-or-n-p (format "Kill Codex session buffer %s? " buffer-name))
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buffer))
+      (tabulated-list-print t))))
+
+(defun codex-ide-session-buffer-list-redisplay ()
+  "Regenerate the session buffer list using current session state."
+  (interactive)
+  (tabulated-list-print t))
 
 ;;;###autoload
 (defun codex-ide-session-buffer-list ()

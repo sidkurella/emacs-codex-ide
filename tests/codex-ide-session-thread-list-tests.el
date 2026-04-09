@@ -43,8 +43,66 @@
           (should (equal (nreverse requests) '("initialize" "thread/list")))
           (with-current-buffer buffer-name
             (should (derived-mode-p 'codex-ide-session-thread-list-mode))
+            (should hl-line-mode)
+            (should (eq hl-line-face 'codex-ide-session-list-current-row-face))
+            (let* ((entries (funcall tabulated-list-entries))
+                   (first-row (cadr (car entries))))
+              (should (eq (get-text-property 0 'face (aref first-row 0))
+                          'codex-ide-session-list-id-face))
+              (should (eq (get-text-property 0 'face (aref first-row 1))
+                          'codex-ide-session-list-primary-face))
+              (should (eq (get-text-property 0 'face (aref first-row 2))
+                          'codex-ide-session-list-status-face))
+              (should (eq (get-text-property 0 'face (aref first-row 3))
+                          'codex-ide-session-list-time-face))
+              (should (eq (get-text-property 0 'face (aref first-row 4))
+                          'codex-ide-session-list-time-face)))
             (should (string-match-p "Investigate↵failure" (buffer-string)))
             (should (string-match-p "thread-1" (buffer-string)))))))))
+
+(ert-deftest codex-ide-session-thread-list-redisplay-refreshes-visible-rows ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (thread-list-call-count 0)
+        (buffer-name nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/list"
+                        (prog1
+                            (if (= thread-list-call-count 0)
+                                '((data . [((id . "thread-11111111")
+                                            (createdAt . 1744038896)
+                                            (updatedAt . 1744039999)
+                                            (preview . "First result"))]))
+                              '((data . [((id . "thread-22222222")
+                                          (createdAt . 1744038896)
+                                          (updatedAt . 1744041000)
+                                          (preview . "Updated result"))])))
+                          (setq thread-list-call-count (1+ thread-list-call-count))))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (setq buffer-name
+                (format "*Codex Threads: %s*"
+                        (file-name-nondirectory
+                         (directory-file-name project-dir))))
+          (codex-ide-session-thread-list)
+          (with-current-buffer buffer-name
+            (should (eq (lookup-key codex-ide-session-thread-list-mode-map (kbd "l"))
+                        #'codex-ide-session-thread-list-redisplay))
+            (should (string-match-p "First result" (buffer-string)))
+            (should-not (string-match-p "Updated result" (buffer-string)))
+            (call-interactively #'codex-ide-session-thread-list-redisplay)
+            (should (= thread-list-call-count 2))
+            (should-not (string-match-p "First result" (buffer-string)))
+            (should (string-match-p "Updated result" (buffer-string)))))))))
 
 (provide 'codex-ide-session-thread-list-tests)
 

@@ -6,7 +6,42 @@
 
 ;;; Code:
 
+(require 'codex-ide)
+(require 'hl-line)
 (require 'tabulated-list)
+
+(defface codex-ide-session-list-primary-face
+  '((t :inherit default :weight semibold))
+  "Face used for the primary column in Codex list views."
+  :group 'codex-ide)
+
+(defface codex-ide-session-list-secondary-face
+  '((t :inherit shadow))
+  "Face used for secondary columns in Codex list views."
+  :group 'codex-ide)
+
+(defface codex-ide-session-list-id-face
+  '((t :inherit font-lock-constant-face))
+  "Face used for thread and identifier columns in Codex list views."
+  :group 'codex-ide)
+
+(defface codex-ide-session-list-status-face
+  '((t :inherit font-lock-keyword-face :weight semibold))
+  "Face used for status columns in Codex list views."
+  :group 'codex-ide)
+
+(defface codex-ide-session-list-time-face
+  '((t :inherit font-lock-doc-face))
+  "Face used for timestamp columns in Codex list views."
+  :group 'codex-ide)
+
+(defface codex-ide-session-list-current-row-face
+  '((((class color) (background light))
+     :background "#f2f5e9")
+    (((class color) (background dark))
+     :background "#2a3126"))
+  "Face used to highlight the current row in Codex list views."
+  :group 'codex-ide)
 
 (defvar-local codex-ide-session-list--entries-function nil
   "Function that returns `tabulated-list-entries' for the current buffer.")
@@ -23,6 +58,10 @@
 
 (define-derived-mode codex-ide-session-list-mode tabulated-list-mode "Codex-Session-List"
   "Parent mode for Codex session list buffers.")
+
+(defun codex-ide-session-list-cell (text face)
+  "Return TEXT propertized with FACE for a tabulated list cell."
+  (propertize (or text "") 'face face))
 
 (defun codex-ide-session-list--tabulated-entries ()
   "Return tabulated list entries for the current buffer."
@@ -55,9 +94,11 @@ buffer before the first render when non-nil."
       (setq tabulated-list-format format
             tabulated-list-padding 2
             tabulated-list-sort-key sort-key
+            hl-line-face 'codex-ide-session-list-current-row-face
             codex-ide-session-list--entries-function entries-function
             codex-ide-session-list--visit-function visit-function
             tabulated-list-entries #'codex-ide-session-list--tabulated-entries)
+      (hl-line-mode 1)
       (when (functionp setup-function)
         (funcall setup-function))
       (tabulated-list-init-header)
