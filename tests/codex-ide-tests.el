@@ -64,6 +64,32 @@
                              'codex-session)
                   session)))))))
 
+(ert-deftest codex-ide-create-process-session-errors-gracefully-when-executable-is-missing ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (cl-letf (((symbol-function 'make-pipe-process)
+                 (lambda (&rest plist)
+                   (codex-ide-test-process-create
+                    :live t
+                    :plist (list :make-pipe-process-spec plist)
+                    :sent-strings nil)))
+                ((symbol-function 'make-process)
+                 (lambda (&rest _)
+                   (signal 'file-missing
+                           '("Searching for program"
+                             "exec: codex: executable file not found in $PATH"))))
+                ((symbol-function 'process-live-p)
+                 (lambda (process)
+                   (and (codex-ide-test-process-p process)
+                        (codex-ide-test-process-live process))))
+                ((symbol-function 'delete-process)
+                 (lambda (process)
+                   (setf (codex-ide-test-process-live process) nil)
+                   nil)))
+        (should-error
+         (codex-ide--create-process-session)
+         :type 'user-error)))))
+
 (ert-deftest codex-ide-ensure-session-for-current-project-prompts-to-start ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (prompt nil)
@@ -693,6 +719,38 @@
           (should (null response-error))
           (should (string= (codex-ide-session-status session) "running")))))))
 
+(ert-deftest codex-ide-process-sentinel-renders-startup-failure-from-stderr ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (process (codex-ide-session-process session))
+               (stderr-process (codex-ide-session-stderr-process session)))
+          (codex-ide--stderr-filter stderr-process "CODEX_HOME does not exist\n")
+          (setf (codex-ide-test-process-live process) nil)
+          (codex-ide--process-sentinel process "failed\n")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "Codex process exited: Codex startup failed." (buffer-string)))
+            (should (string-match-p "CODEX_HOME does not exist" (buffer-string))))
+          (should-not (memq session codex-ide--sessions)))))))
+
+(ert-deftest codex-ide-stderr-filter-strips-ansi-and-logs-structured-lines ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (stderr-process (codex-ide-session-stderr-process session)))
+          (codex-ide--stderr-filter
+           stderr-process
+           "\x1b[2m2026-04-09T16:58:08.078004Z\x1b[0m \x1b[31mERROR\x1b[0m failed to connect\n")
+          (with-current-buffer (codex-ide-session-log-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p "stderr: 2026-04-09T16:58:08.078004Z ERROR failed to connect" text))
+              (should-not (string-match-p "\x1b\\[" text))))
+          (should (equal (codex-ide--session-metadata-get session :stderr-partial) ""))
+          (should (string-match-p "2026-04-09T16:58:08.078004Z ERROR failed to connect"
+                                  (codex-ide--session-metadata-get session :stderr-tail))))))))
+
 (ert-deftest codex-ide-thread-status-null-does-not-overwrite-running-state ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -706,6 +764,174 @@
           (should (string= (codex-ide-session-status session) "running"))
           (should (string-match-p "Codex:Running"
                                   (codex-ide--mode-line-status session))))))))
+
+(ert-deftest codex-ide-normalize-session-status-maps-server-status-types ()
+  (should (equal (codex-ide--normalize-session-status '((type . "active"))) "running"))
+  (should (equal (codex-ide--normalize-session-status '((type . "systemError"))) "error"))
+  (should (equal (codex-ide--normalize-session-status '((type . "completed"))) "idle")))
+
+(ert-deftest codex-ide-thread-status-changed-reads-direct-status-payload ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-status session) "running")
+          (codex-ide--handle-notification
+           session
+           '((method . "thread/status/changed")
+             (params . ((threadId . "thread-1")
+                        (status . ((type . "systemError")))))))
+          (should (string= (codex-ide-session-status session) "error"))
+          (should (string-match-p "Codex:Error"
+                                  (codex-ide--mode-line-status session))))))))
+
+(ert-deftest codex-ide-error-notification-handles-authentication-failures-gracefully ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-auth-1")
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-auth-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "error")
+             (params . ((message . "Authentication failed. Please login again.")))))
+          (should-not (codex-ide-session-current-turn-id session))
+          (should (string= (codex-ide-session-status session) "idle"))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "Codex notification: Codex authentication failed." (buffer-string)))
+            (should (string-match-p "Run `codex login`" (buffer-string)))
+            (goto-char (point-max))
+            (forward-line 0)
+            (should (looking-at-p "> "))))))))
+
+(ert-deftest codex-ide-error-notification-retries-stay-concise-and-keep-turn-open ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-retry-1")
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-retry-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "error")
+             (params . ((error . ((message . "Reconnecting... 2/5")
+                                  (additionalDetails . "We're currently experiencing high demand.")))
+                        (willRetry . t)
+                        (turnId . "turn-retry-1")))))
+          (should (string= (codex-ide-session-status session) "running"))
+          (should (equal (codex-ide-session-current-turn-id session) "turn-retry-1"))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p "\\[Codex retrying\\] Reconnecting... 2/5" text))
+              (should (string-match-p
+                       "  └ additionalDetails: We're currently experiencing high demand\\."
+                       text))
+              (should-not (string-match-p "Inspect the session log for details" text))
+              (should-not (string-match-p "\\[Codex notification:" text))
+              (should-not (string-match-p "^> $" text))))
+          (with-current-buffer (codex-ide-session-log-buffer session)
+            (should (string-match-p "Retryable Codex error: Reconnecting... 2/5"
+                                    (buffer-string)))))))))
+
+(ert-deftest codex-ide-error-notification-handles-rate-limits-gracefully ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-rate-1")
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-rate-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "error")
+             (params . ((message . "Rate limit exceeded (429 Too Many Requests)")))))
+          (should (string= (codex-ide-session-status session) "idle"))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "Codex notification: Codex is rate limited." (buffer-string)))
+            (should (string-match-p "Wait for quota to recover" (buffer-string)))))))))
+
+(ert-deftest codex-ide-error-notification-final-auth-failure-omits-raw-payload ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-auth-final-1")
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-auth-final-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "error")
+             (params . ((error . ((message . "unexpected status 401 Unauthorized")
+                                  (additionalDetails . "Missing bearer or basic authentication in header")))
+                        (willRetry . :json-false)
+                        (turnId . "turn-auth-final-1")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p "Codex notification: Codex authentication failed." text))
+              (should (string-match-p
+                       "  └ unexpected status 401 Unauthorized"
+                       text))
+              (should (string-match-p
+                       "  └ additionalDetails: Missing bearer or basic authentication in header"
+                       text))
+              (should-not (string-match-p "\\(willRetry\\|turnId\\|codexErrorInfo\\)" text))))
+          (should (string= (codex-ide-session-status session) "idle")))))))
+
+(ert-deftest codex-ide-turn-completed-after-final-error-does-not-open-duplicate-prompt ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-auth-final-2")
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-auth-final-2")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "error")
+             (params . ((error . ((message . "unexpected status 401 Unauthorized")
+                                  (additionalDetails . "Missing bearer or basic authentication in header")))
+                        (willRetry . :json-false)
+                        (turnId . "turn-auth-final-2")))))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/completed")
+             (params . ((turnId . "turn-auth-final-2")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let* ((text (buffer-string))
+                   (prompts (how-many "^> " (point-min) (point-max))))
+              (should (= prompts 1))
+              (goto-char (point-max))
+              (forward-line 0)
+              (should (looking-at-p "> "))
+              (should-not (string-match-p "> \n\n> " text)))))))))
+
+(ert-deftest codex-ide-notification-error-info-tolerates-non-alist-codex-error-info ()
+  (should
+   (equal
+    (codex-ide--notification-error-info
+     '((error . ((message . "unexpected status 401 Unauthorized")
+                 (codexErrorInfo . "other")
+                 (additionalDetails . "Missing bearer or basic authentication in header")))
+       (willRetry . :json-false)
+       (turnId . "turn-1")))
+    '((message . "unexpected status 401 Unauthorized")
+      (details . "Missing bearer or basic authentication in header")
+      (http-status . nil)
+      (will-retry . nil)
+      (turn-id . "turn-1")))))
 
 (ert-deftest codex-ide-trace-back-to-log-jumps-to-originating-notification-line ()
   (let ((project-dir (codex-ide-test--make-temp-project))

@@ -494,7 +494,15 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
     (when (stringp raw)
       (let ((trimmed (string-trim raw)))
         (unless (string-empty-p trimmed)
-          trimmed)))))
+          (pcase (downcase trimmed)
+            ((or "active" "inprogress" "in_progress") "running")
+            ((or "completed" "complete" "success") "idle")
+            ((or "systemerror" "system_error") "error")
+            ((or "failed" "error") "error")
+            ((or "idle" "running" "submitted" "starting" "interrupting"
+                 "disconnected" "finished" "killed")
+             (downcase trimmed))
+            (_ trimmed)))))))
 
 (defun codex-ide--mode-line-status (&optional session)
   "Return the current modeline status segment for SESSION."
@@ -548,22 +556,38 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
       (let ((kill-buffer-query-functions nil))
         (kill-buffer buffer)))))
 
-(defun codex-ide--append-log-output (session output)
-  "Append OUTPUT to SESSION's log buffer."
-  (when-let ((buffer (codex-ide--ensure-log-buffer session)))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (moving (= (point) (point-max))))
-        (goto-char (point-max))
-        (insert output)
-        (codex-ide--trim-log-buffer)
-        (when moving
-          (goto-char (point-max)))))))
-
 (defun codex-ide--stderr-filter (process chunk)
   "Append stderr CHUNK from PROCESS to the owning session log."
   (when-let ((session (process-get process 'codex-session)))
-    (codex-ide--append-log-output session chunk)))
+    (let* ((sanitized (codex-ide--sanitize-ansi-text chunk))
+           (pending (concat (or (codex-ide--session-metadata-get session :stderr-partial) "")
+                            sanitized))
+           (lines (split-string pending "\n"))
+           (complete-lines (butlast lines))
+           (partial (car (last lines))))
+      (codex-ide--session-metadata-put
+       session
+       :stderr-tail
+       (let* ((previous-tail (or (codex-ide--session-metadata-get session :stderr-tail) ""))
+              (combined-tail (concat previous-tail sanitized)))
+         (if (> (length combined-tail) 4000)
+             (substring combined-tail (- (length combined-tail) 4000))
+           combined-tail)))
+      (codex-ide--session-metadata-put session :stderr-partial partial)
+      (when complete-lines
+        (dolist (line complete-lines)
+          (unless (string-empty-p line)
+            (codex-ide-log-message session "stderr: %s" line)))))))
+
+(defun codex-ide--discard-process-buffer (process)
+  "Detach and kill any buffer associated with PROCESS."
+  (when process
+    (let ((buffer (ignore-errors (process-buffer process))))
+      (when buffer
+        (ignore-errors (set-process-buffer process nil))
+        (when (buffer-live-p buffer)
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer buffer)))))))
 
 (defun codex-ide--session-buffer-p (buffer)
   "Return non-nil when BUFFER looks like a Codex session buffer."
@@ -1279,6 +1303,203 @@ When called interactively, echo the item type in the minibuffer."
     (setq metadata (plist-put metadata key value))
     (puthash session metadata codex-ide--session-metadata)
     value))
+
+(defun codex-ide--stringify-error-payload (value)
+  "Return a concise string for error VALUE."
+  (cond
+   ((stringp value) (string-trim value))
+   ((and (listp value) (alist-get 'message value))
+    (string-trim (format "%s" (alist-get 'message value))))
+   ((null value) "")
+   (t (string-trim (format "%s" value)))))
+
+(defun codex-ide--extract-error-text (&rest values)
+  "Return the first useful error string from VALUES."
+  (let ((parts (delq nil
+                     (mapcar (lambda (value)
+                               (let ((text (codex-ide--stringify-error-payload value)))
+                                 (unless (string-empty-p text)
+                                   text)))
+                             values))))
+    (string-join (delete-dups parts) "\n")))
+
+(defun codex-ide--sanitize-ansi-text (text)
+  "Strip ANSI escape sequences from TEXT."
+  (if (stringp text)
+      (replace-regexp-in-string "\x1b\\[[0-9;]*[[:alpha:]]" "" text)
+    ""))
+
+(defun codex-ide--alist-get-safe (key value)
+  "Return KEY from VALUE when VALUE is an alist, else nil."
+  (when (listp value)
+    (alist-get key value)))
+
+(defun codex-ide--notification-error-info (params)
+  "Extract normalized error details from notification PARAMS."
+  (let* ((error-info (or (alist-get 'error params) params))
+         (codex-info (codex-ide--alist-get-safe 'codexErrorInfo error-info))
+         (stream-disconnected
+          (or (codex-ide--alist-get-safe 'responseStreamDisconnected codex-info)
+              (codex-ide--alist-get-safe 'responseStreamDisconnected error-info)))
+         (status-code (or (codex-ide--alist-get-safe 'httpStatusCode stream-disconnected)
+                          (codex-ide--alist-get-safe 'httpStatusCode codex-info)
+                          (codex-ide--alist-get-safe 'httpStatusCode error-info)))
+         (message (or (codex-ide--alist-get-safe 'message error-info)
+                      (codex-ide--alist-get-safe 'message params)))
+         (details (or (codex-ide--alist-get-safe 'additionalDetails error-info)
+                      (codex-ide--alist-get-safe 'additionalDetails params)))
+         (will-retry (let ((value (alist-get 'willRetry params)))
+                       (not (memq value '(nil :json-false)))))
+         (turn-id (or (alist-get 'turnId params)
+                      (codex-ide--alist-get-safe 'turnId error-info))))
+    `((message . ,message)
+      (details . ,details)
+      (http-status . ,status-code)
+      (will-retry . ,will-retry)
+      (turn-id . ,turn-id))))
+
+(defun codex-ide--notification-error-display-detail (info)
+  "Build concise display detail for normalized notification error INFO."
+  (let ((message (codex-ide--sanitize-ansi-text (alist-get 'message info)))
+        (details (codex-ide--sanitize-ansi-text (alist-get 'details info))))
+    (string-join
+     (delq nil
+           (list (unless (string-empty-p message) message)
+                 (unless (or (string-empty-p details)
+                             (equal details message))
+                   details)))
+     "\n")))
+
+(defun codex-ide--notification-error-message (info)
+  "Return the primary notification error message for INFO."
+  (codex-ide--sanitize-ansi-text (or (alist-get 'message info) "")))
+
+(defun codex-ide--notification-error-additional-details (info)
+  "Return the secondary additional details string for INFO, or nil."
+  (let ((message (codex-ide--notification-error-message info))
+        (details (codex-ide--sanitize-ansi-text (alist-get 'details info))))
+    (unless (or (string-empty-p details)
+                (equal details message))
+      details)))
+
+(defun codex-ide--append-notification-additional-details (session details)
+  "Append a dimmed additional-details line for SESSION when DETAILS is non-empty."
+  (when (and (stringp details)
+             (not (string-empty-p details)))
+    (let ((codex-ide--current-agent-item-type "error"))
+      (codex-ide--append-agent-text
+       (codex-ide-session-buffer session)
+       (codex-ide--item-detail-line
+        (format "additionalDetails: %s" details))
+       'codex-ide-item-detail-face))))
+
+(defun codex-ide--handle-retryable-notification-error (session info)
+  "Handle a retryable notification error for SESSION using INFO."
+  (let* ((turn-id (alist-get 'turn-id info))
+         (message (or (codex-ide--notification-error-message info) "Retrying request"))
+         (details (codex-ide--notification-error-additional-details info))
+         (retry-key (format "%s:%s" turn-id message))
+         (previous (codex-ide--session-metadata-get session :last-retry-notice)))
+    (unless (equal retry-key previous)
+      (codex-ide--session-metadata-put session :last-retry-notice retry-key)
+      (codex-ide-log-message session "Retryable Codex error: %s" message)
+      (codex-ide--append-to-buffer
+       (codex-ide-session-buffer session)
+       (format "\n[Codex retrying] %s\n" message)
+       'warning)
+      (codex-ide--append-notification-additional-details session details))))
+
+(defun codex-ide--classify-session-error (&rest values)
+  "Classify Codex session failure details from VALUES.
+Return a plist with :kind, :summary, and :guidance."
+  (let* ((text (downcase (apply #'codex-ide--extract-error-text values)))
+         (match (lambda (&rest needles)
+                  (seq-some (lambda (needle)
+                              (and needle (string-match-p (regexp-quote needle) text)))
+                            needles))))
+    (cond
+     ((funcall match "authentication" "unauthorized" "unauthenticated" "invalid api key"
+               "login required" "not logged in" "auth")
+      '(:kind auth
+        :summary "Codex authentication failed."
+        :guidance "Run `codex login` or refresh your credentials, then retry."))
+     ((funcall match "rate limit" "rate-limit" "too many requests" "429")
+      '(:kind rate-limit
+        :summary "Codex is rate limited."
+        :guidance "Wait for quota to recover or switch accounts/models before retrying."))
+     ((funcall match "no such file or directory" "does not exist" "not found"
+               "cannot find" "enoent")
+      '(:kind missing-path
+        :summary "Codex startup failed because a required path does not exist."
+        :guidance "Check `codex-ide-cli-path`, `CODEX_HOME`, and the project working directory."))
+     ((funcall match "executable file not found" "command not found" "spawn codex"
+               "cannot run program" "failed to execute")
+      '(:kind executable
+        :summary "The Codex executable could not be started."
+        :guidance "Install the Codex CLI or update `codex-ide-cli-path` so Emacs can launch it."))
+     ((funcall match "startup" "initialize" "app-server" "config" "configuration")
+      '(:kind startup
+        :summary "Codex app-server startup failed."
+        :guidance "Inspect the log buffer for the exact startup error and fix the local Codex configuration."))
+     (t
+      '(:kind generic
+        :summary "Codex reported an error."
+        :guidance "Inspect the session log for details, then retry once the underlying issue is fixed.")))))
+
+(defun codex-ide--format-session-error-summary (classification &optional prefix)
+  "Format the headline summary for CLASSIFICATION with PREFIX."
+  (format "[%s%s]"
+          (or prefix "Codex error")
+          (if-let ((summary (plist-get classification :summary)))
+              (format ": %s" summary)
+            "")))
+
+(defun codex-ide--format-session-error-message (classification detail &optional prefix)
+  "Format a full message string from CLASSIFICATION and DETAIL with PREFIX."
+  (string-join
+   (delq nil
+         (list (codex-ide--format-session-error-summary classification prefix)
+               (unless (string-empty-p detail)
+                 detail)
+               (plist-get classification :guidance)))
+   "\n"))
+
+(defun codex-ide--render-session-error (session values &optional prefix face)
+  "Render session error VALUES for SESSION with PREFIX using FACE."
+  (let* ((detail (apply #'codex-ide--extract-error-text values))
+         (classification (apply #'codex-ide--classify-session-error values))
+         (summary (codex-ide--format-session-error-summary classification prefix))
+         (guidance (plist-get classification :guidance))
+         (buffer (codex-ide-session-buffer session)))
+    (codex-ide-log-message session "%s" summary)
+    (unless (string-empty-p detail)
+      (codex-ide-log-message session "  %s" detail))
+    (when guidance
+      (codex-ide-log-message session "%s" guidance))
+    (setf (codex-ide-session-status session) "error")
+    (codex-ide--update-header-line session)
+    (codex-ide--append-to-buffer buffer (format "\n%s\n" summary) (or face 'error))
+    (unless (string-empty-p detail)
+      (let ((codex-ide--current-agent-item-type "error"))
+        (codex-ide--append-agent-text
+         buffer
+         (codex-ide--item-detail-line detail)
+         'codex-ide-item-detail-face)))
+    (when guidance
+      (codex-ide--append-to-buffer buffer (format "%s\n" guidance) (or face 'error)))
+    classification))
+
+(defun codex-ide--recover-from-session-error (session classification)
+  "Reset SESSION after a recoverable error using CLASSIFICATION."
+  (when (and (memq (plist-get classification :kind) '(auth rate-limit generic startup))
+             (or (codex-ide-session-current-turn-id session)
+                 (codex-ide-session-output-prefix-inserted session)))
+    (codex-ide--session-metadata-put session :last-retry-notice nil)
+    (codex-ide--finish-turn
+     session
+     (format "[%s]"
+             (or (plist-get classification :summary)
+                 "Codex request failed")))))
 
 (defun codex-ide--format-compact-number (value)
   "Format numeric VALUE in a compact human-readable form."
@@ -2281,7 +2502,10 @@ The result is an alist with `formatted' and `summary' entries."
     (cond
      (err
       (codex-ide-log-message session "Request %s (id=%s) failed: %S" method id err)
-      (error "Codex app-server request %s failed: %s" method err))
+      (error "Codex app-server request %s failed: %s"
+             method
+             (or (alist-get 'message err)
+                 (codex-ide--stringify-error-payload err))))
      ((not done)
       (codex-ide-log-message session "Request %s (id=%s) timed out" method id)
       (error "Timed out waiting for %s" method))
@@ -2792,51 +3016,71 @@ ACTION is a short past-tense label used in log messages, such as
                      :prompt-history-draft nil
                      :partial-line ""
                      :status "starting"))
-           (stderr-process (make-pipe-process
-                            :name (format "codex-ide-stderr[%s]"
-                                          process-label)
-                            :buffer nil
-                            :coding 'utf-8-unix
-                            :noquery t
-                            :filter #'codex-ide--stderr-filter))
-           (process (make-process
-                     :name (format "codex-ide[%s]"
-                                   process-label)
-                     :buffer nil
-                     :command (codex-ide--app-server-command)
-                     :coding 'utf-8-unix
-                     :filter #'codex-ide--process-filter
-                     :sentinel #'codex-ide--process-sentinel
-                     :stderr stderr-process)))
-      (setf (codex-ide-session-process session) process)
-      (setf (codex-ide-session-stderr-process session) stderr-process)
-      (process-put process 'codex-session session)
-      (process-put stderr-process 'codex-session session)
-      (with-current-buffer buffer
-        (codex-ide-session-mode)
-        (setq-local default-directory working-dir)
-        (setq-local codex-ide--session session)
-        (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (format "Codex session for %s\n\n"
-                          (abbreviate-file-name working-dir)))
-          (codex-ide--freeze-region (point-min) (point-max))))
-      (codex-ide--ensure-log-buffer session)
-      (set-process-query-on-exit-flag process nil)
-      (set-process-query-on-exit-flag stderr-process nil)
-      (with-current-buffer buffer
-        (codex-ide--set-session session))
-      (codex-ide-log-message
-       session
-       "Created session buffer %s and log buffer %s"
-       (buffer-name buffer)
-       (buffer-name (codex-ide-session-log-buffer session)))
-      (codex-ide-log-message
-       session
-       "Starting process: %s"
-       (string-join (codex-ide--app-server-command) " "))
-      session)))
+           (stderr-process nil)
+           (process nil))
+      (condition-case err
+          (progn
+            (setq stderr-process
+                  (make-pipe-process
+                   :name (format "codex-ide-stderr[%s]"
+                                 process-label)
+                   :buffer nil
+                   :coding 'utf-8-unix
+                   :noquery t
+                   :filter #'codex-ide--stderr-filter))
+            (codex-ide--discard-process-buffer stderr-process)
+            (setq process
+                  (make-process
+                   :name (format "codex-ide[%s]"
+                                 process-label)
+                   :buffer nil
+                   :command (codex-ide--app-server-command)
+                   :coding 'utf-8-unix
+                   :filter #'codex-ide--process-filter
+                   :sentinel #'codex-ide--process-sentinel
+                   :stderr stderr-process))
+            (setf (codex-ide-session-process session) process)
+            (setf (codex-ide-session-stderr-process session) stderr-process)
+            (process-put process 'codex-session session)
+            (process-put stderr-process 'codex-session session)
+            (with-current-buffer buffer
+              (codex-ide-session-mode)
+              (setq-local default-directory working-dir)
+              (setq-local codex-ide--session session)
+              (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert (format "Codex session for %s\n\n"
+                                (abbreviate-file-name working-dir)))
+                (codex-ide--freeze-region (point-min) (point-max))))
+            (codex-ide--ensure-log-buffer session)
+            (set-process-query-on-exit-flag process nil)
+            (set-process-query-on-exit-flag stderr-process nil)
+            (with-current-buffer buffer
+              (codex-ide--set-session session))
+            (codex-ide-log-message
+             session
+             "Created session buffer %s and log buffer %s"
+             (buffer-name buffer)
+             (buffer-name (codex-ide-session-log-buffer session)))
+            (codex-ide-log-message
+             session
+             "Starting process: %s"
+             (string-join (codex-ide--app-server-command) " "))
+            session)
+        (error
+         (when (process-live-p stderr-process)
+           (delete-process stderr-process))
+         (signal 'user-error
+                 (list
+                  (codex-ide--format-session-error-message
+                   (codex-ide--classify-session-error
+                    (error-message-string err)
+                    (codex-ide--app-server-command))
+                   (codex-ide--extract-error-text
+                    (error-message-string err)
+                    (codex-ide--app-server-command))
+                   "Codex startup failed"))))))))
 
 (defun codex-ide--show-session-buffer (session)
   "Display SESSION's buffer and return SESSION."
@@ -3019,14 +3263,23 @@ MODE can be nil or `new', `continue', or `resume'."
             session))
       (error
        (when created-session
-         (codex-ide-log-message created-session
-                                "Session startup failed: %s"
-                                (error-message-string err))
-         (when (process-live-p (codex-ide-session-process created-session))
-           (delete-process (codex-ide-session-process created-session)))
-         (when (buffer-live-p (codex-ide-session-buffer created-session))
-           (kill-buffer (codex-ide-session-buffer created-session)))
-         (codex-ide--cleanup-session created-session))
+         (let* ((stderr-tail (codex-ide--session-metadata-get created-session :stderr-tail))
+                (classification
+                 (codex-ide--render-session-error
+                  created-session
+                  (list (error-message-string err) stderr-tail)
+                  "Codex startup failed")))
+           (when (process-live-p (codex-ide-session-process created-session))
+             (delete-process (codex-ide-session-process created-session)))
+           (codex-ide--show-session-buffer created-session)
+           (codex-ide--cleanup-session created-session)
+           (signal 'user-error
+                   (list (codex-ide--format-session-error-message
+                          classification
+                          (codex-ide--extract-error-text
+                           (error-message-string err)
+                           stderr-tail)
+                          "Codex startup failed")))))
        (signal (car err) (cdr err)))
       (quit
        (when created-session
@@ -3235,7 +3488,8 @@ CHOICES is an alist of labels to returned values."
        (codex-ide--update-header-line session))
       ("thread/status/changed"
        (let* ((thread (alist-get 'thread params))
-              (status (alist-get 'status thread))
+              (status (or (alist-get 'status params)
+                          (alist-get 'status thread)))
               (normalized-status (codex-ide--normalize-session-status status)))
          (when normalized-status
            (setf (codex-ide-session-status session) normalized-status)))
@@ -3346,23 +3600,42 @@ CHOICES is an alist of labels to returned values."
           (alist-get 'status item))
          (codex-ide--render-item-completion session item)))
       ("turn/completed"
-       (let ((interrupted (codex-ide-session-interrupt-requested session)))
+       (let ((interrupted (codex-ide-session-interrupt-requested session))
+             (turn-id (codex-ide-session-current-turn-id session)))
          (codex-ide-log-message
           session
           "Turn completed: %s"
-          (codex-ide-session-current-turn-id session))
-         (when interrupted
-           (codex-ide-log-message session "Turn completed after interrupt request"))
-         (codex-ide--finish-turn
-          session
-          (when interrupted "[Agent interrupted]"))))
+          turn-id)
+         (if turn-id
+             (progn
+               (when interrupted
+                 (codex-ide-log-message session "Turn completed after interrupt request"))
+               (codex-ide--finish-turn
+                session
+                (when interrupted "[Agent interrupted]")))
+           (codex-ide-log-message
+            session
+            "Ignoring duplicate turn/completed notification for an already-closed turn"))))
       ("error"
-       (let ((codex-ide--current-agent-item-type "error"))
+       (let* ((codex-ide--current-agent-item-type "error")
+              (info (codex-ide--notification-error-info params))
+              (message (codex-ide--notification-error-message info))
+              (details (codex-ide--notification-error-additional-details info))
+              (detail (codex-ide--notification-error-display-detail info))
+              (classification
+               (codex-ide--classify-session-error
+                detail
+                (alist-get 'http-status info))))
          (codex-ide-log-message session "Error notification: %S" params)
-         (codex-ide--append-agent-text
-          buffer
-          (format "\n[Codex error] %S\n" params)
-          'error)))
+         (if (alist-get 'will-retry info)
+             (codex-ide--handle-retryable-notification-error session info)
+           (progn
+             (codex-ide--render-session-error
+              session
+              (list message (alist-get 'http-status info))
+              "Codex notification")
+             (codex-ide--append-notification-additional-details session details)
+             (codex-ide--recover-from-session-error session classification)))))
       ((or "notifications/elicitation/complete"
            "mcpServer/elicitation/complete")
        (codex-ide-log-message
@@ -3426,12 +3699,21 @@ CHOICES is an alist of labels to returned values."
   (when-let ((session (process-get process 'codex-session)))
     (let ((buffer (codex-ide-session-buffer session)))
       (codex-ide-log-message session "Process event: %s" (string-trim event))
-      (setf (codex-ide-session-status session) (string-trim event))
-      (codex-ide--update-header-line session)
-      (codex-ide--append-to-buffer
-       buffer
-       (format "\n[Codex process %s]\n" (string-trim event))
-       'shadow)
+      (if (process-live-p process)
+          (progn
+            (setf (codex-ide-session-status session) (string-trim event))
+            (codex-ide--update-header-line session)
+            (codex-ide--append-to-buffer
+             buffer
+             (format "\n[Codex process %s]\n" (string-trim event))
+             'shadow))
+        (let ((classification
+               (codex-ide--render-session-error
+                session
+                (list (string-trim event)
+                      (codex-ide--session-metadata-get session :stderr-tail))
+                "Codex process exited")))
+          (codex-ide--recover-from-session-error session classification)))
       (unless (process-live-p process)
         (codex-ide-log-message session "Process exited")
         (codex-ide--cleanup-session session)))))
