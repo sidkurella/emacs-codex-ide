@@ -29,6 +29,50 @@
   "Codex-Buffers"
   "Mode for listing live Codex session buffers.")
 
+(defun codex-ide-session-buffer-list--user-prompt-face-p (face)
+  "Return non-nil when FACE includes `codex-ide-user-prompt-face'."
+  (if (listp face)
+      (memq 'codex-ide-user-prompt-face face)
+    (eq face 'codex-ide-user-prompt-face)))
+
+(defun codex-ide-session-buffer-list--last-prompt-text (session)
+  "Return the last non-empty prompt text from SESSION's live buffer."
+  (when-let ((buffer (codex-ide-session-buffer session)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (save-excursion
+          (let ((pos (point-max))
+                candidate)
+            (while (and (> pos (point-min)) (not candidate))
+              (setq pos (previous-single-char-property-change pos 'face nil (point-min)))
+              (when (codex-ide-session-buffer-list--user-prompt-face-p
+                     (get-char-property pos 'face))
+                (let* ((end (next-single-char-property-change pos 'face nil (point-max)))
+                       (start pos)
+                       text)
+                  (while (and (> start (point-min))
+                              (codex-ide-session-buffer-list--user-prompt-face-p
+                               (get-char-property (1- start) 'face)))
+                    (setq start (1- start)))
+                  (setq text (string-remove-prefix
+                              "> "
+                              (buffer-substring-no-properties start end)))
+                  (setq text (string-trim text))
+                  (unless (string-empty-p text)
+                    (setq candidate text))
+                  (setq pos start))))
+            candidate))))))
+
+(defun codex-ide-session-buffer-list--last-prompt (session)
+  "Return a single-line preview of SESSION's last non-empty prompt line."
+  (if-let ((prompt (codex-ide-session-buffer-list--last-prompt-text session)))
+      (let ((preview (replace-regexp-in-string
+                      "[\n\r]+"
+                      "↵"
+                      (codex-ide--thread-choice-preview prompt))))
+        (if (string-empty-p preview) "Untitled" preview))
+    ""))
+
 (defun codex-ide-session-buffer-list--entries ()
   "Return tabulated entries for live Codex session buffers."
   (setq codex-ide-session-buffer-list--sessions
@@ -50,11 +94,14 @@
                       directory
                       'codex-ide-session-list-secondary-face)
                      (codex-ide-session-list-cell
-                      thread-id
-                      'codex-ide-session-list-id-face)
+                      (codex-ide-session-buffer-list--last-prompt session)
+                      'codex-ide-session-list-primary-face)
                      (codex-ide-session-list-cell
                       status
-                      'codex-ide-session-list-status-face)))))
+                      'codex-ide-session-list-status-face)
+                     (codex-ide-session-list-cell
+                      thread-id
+                      'codex-ide-session-list-id-face)))))
    codex-ide-session-buffer-list--sessions))
 
 (defun codex-ide-session-buffer-list--visit (session)
@@ -63,20 +110,24 @@
     (codex-ide--show-session-buffer session)))
 
 (defun codex-ide-session-buffer-list-delete-buffer ()
-  "Kill the session buffer for the row at point and refresh the list."
+  "Kill the session buffer for the row at point or every row in the active region."
   (interactive)
-  (let* ((session (tabulated-list-get-id))
-         (buffer (and (codex-ide-session-p session)
-                      (codex-ide-session-buffer session)))
-         (buffer-name (and (buffer-live-p buffer)
-                           (buffer-name buffer))))
-    (unless session
-      (user-error "No list entry at point"))
-    (unless (buffer-live-p buffer)
-      (user-error "Session buffer is no longer live"))
-    (when (y-or-n-p (format "Kill Codex session buffer %s? " buffer-name))
+  (let* ((sessions (codex-ide-session-list-selected-ids))
+         (count (length sessions)))
+    (dolist (session sessions)
+      (let ((buffer (and (codex-ide-session-p session)
+                         (codex-ide-session-buffer session))))
+        (unless (buffer-live-p buffer)
+          (user-error "Session buffer is no longer live"))))
+    (when (y-or-n-p
+           (if (= count 1)
+               (let* ((session (car sessions))
+                      (buffer (codex-ide-session-buffer session)))
+                 (format "Kill Codex session buffer %s? " (buffer-name buffer)))
+             (format "Kill %d Codex session buffers? " count)))
       (let ((kill-buffer-query-functions nil))
-        (kill-buffer buffer))
+        (dolist (session sessions)
+          (kill-buffer (codex-ide-session-buffer session))))
       (tabulated-list-print t))))
 
 (defun codex-ide-session-buffer-list-redisplay ()
@@ -90,12 +141,13 @@
   (interactive)
   (let ((buffer
          (codex-ide-session-list--setup
-          "*Codex Session Buffers*"
+         "*Codex Session Buffers*"
           #'codex-ide-session-buffer-list-mode
           [("Buffer" 28 t)
            ("Workspace" 40 t)
-           ("Thread" 24 t)
-           ("Status" 14 t)]
+           ("Last Prompt" 48 t)
+           ("Status" 14 t)
+           ("Thread" 24 t)]
           #'codex-ide-session-buffer-list--entries
           #'codex-ide-session-buffer-list--visit
           '("Buffer" . nil))))

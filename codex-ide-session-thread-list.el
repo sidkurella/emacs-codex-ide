@@ -96,14 +96,18 @@
   (codex-ide--show-or-resume-thread thread-id codex-ide-session-thread-list--directory))
 
 (defun codex-ide-session-thread-list-delete-thread ()
-  "Delete the stored thread on the current row and refresh the list."
+  "Delete the stored thread on the current row or every row in the active region."
   (interactive)
   (codex-ide--prepare-session-operations)
-  (let ((thread-id (tabulated-list-get-id)))
-    (unless thread-id
-      (user-error "No list entry at point"))
-    (codex-ide-delete-session-thread thread-id)
-    (tabulated-list-print t)))
+  (let* ((thread-ids (codex-ide-session-list-selected-ids))
+         (count (length thread-ids)))
+    (when (y-or-n-p
+           (if (= count 1)
+               "Delete 1 Codex thread? "
+             (format "Delete %d Codex threads? " count)))
+      (dolist (thread-id thread-ids)
+        (codex-ide-delete-session-thread thread-id))
+      (tabulated-list-print t))))
 
 (defun codex-ide-session-thread-list-redisplay ()
   "Regenerate the workspace thread list using current thread state."

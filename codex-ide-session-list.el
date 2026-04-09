@@ -81,6 +81,25 @@
                                               :reuse-mode-window)))
       (funcall codex-ide-session-list--visit-function id))))
 
+(defun codex-ide-session-list-selected-ids ()
+  "Return ids from the current row or every row touched by the active region."
+  (if (use-region-p)
+      (let ((ids nil)
+            (end (max (region-beginning) (1- (region-end)))))
+        (save-excursion
+          (goto-char (region-beginning))
+          (beginning-of-line)
+          (while (<= (point) end)
+            (when-let ((id (tabulated-list-get-id)))
+              (push id ids))
+            (forward-line 1)))
+        (or (nreverse ids)
+            (user-error "No list entries in region")))
+    (let ((id (tabulated-list-get-id)))
+      (unless id
+        (user-error "No list entry at point"))
+      (list id))))
+
 (defun codex-ide-session-list--setup
     (buffer-name mode format entries-function visit-function
                  &optional sort-key setup-function)
