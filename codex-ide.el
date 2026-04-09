@@ -1950,7 +1950,7 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
           (user-error (if (< direction 0)
                           "No earlier prompt line"
                         "No later prompt line")))
-        (goto-char (match-beginning 0))))))
+        (goto-char (match-end 0))))))
 
 (defun codex-ide--begin-turn-display (&optional session context-summary)
   "Freeze the current prompt and show immediate pending output for SESSION.
