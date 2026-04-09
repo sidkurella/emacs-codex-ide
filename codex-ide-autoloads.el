@@ -98,7 +98,7 @@ Jump to the previous user prompt line in the session buffer." t)
 Jump to the next user prompt line in the session buffer." t)
 (autoload 'codex-ide-submit "codex-ide" "\
 Submit the current in-buffer prompt to Codex." t)
-(register-definition-prefixes "codex-ide" '("codex-ide-" "make-codex-ide-session"))
+(register-definition-prefixes "codex-ide" '("codex-ide-"))
 
 
 ;;; Generated autoloads from codex-ide-mcp-bridge.el
@@ -309,6 +309,16 @@ that session and then remove the persisted thread data from disk.
 
 (fn THREAD-ID)" t)
 (register-definition-prefixes "codex-ide-delete-session-thread" '("codex-ide--"))
+
+
+;;; Generated autoloads from codex-ide-core.el
+
+(register-definition-prefixes "codex-ide-core" '("codex-ide-" "make-codex-ide-session"))
+
+
+;;; Generated autoloads from codex-ide-renderer.el
+
+(register-definition-prefixes "codex-ide-renderer" '("codex-ide-"))
 
 ;;; End of scraped data
 

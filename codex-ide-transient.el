@@ -17,8 +17,8 @@
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-check-status "codex-ide" ())
-(declare-function codex-ide--get-working-directory "codex-ide" ())
-(declare-function codex-ide--get-process "codex-ide" ())
+(declare-function codex-ide--get-working-directory "codex-ide-core" ())
+(declare-function codex-ide--get-process "codex-ide-core" ())
 
 (autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list"
   "Show a tabulated list of live Codex session buffers." t)
