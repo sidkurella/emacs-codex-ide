@@ -249,9 +249,6 @@ top of the buffer."
 (defvar codex-ide--sessions nil
   "List of active Codex session objects.")
 
-(defvar codex-ide--last-accessed-buffer nil
-  "Most recently displayed Codex session buffer.")
-
 (defvar codex-ide--active-buffer-contexts (make-hash-table :test 'equal)
   "Hash table mapping working directories to the latest Emacs buffer context.")
 
@@ -836,7 +833,6 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
                         (window-parameters . ,window-parameters)))))
                (display-buffer buffer))
            (display-buffer buffer))))
-    (setq codex-ide--last-accessed-buffer buffer)
     (when (and window codex-ide-focus-on-open)
       (select-window window))
     (when (and window
@@ -862,7 +858,6 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
           (set-window-buffer window buffer)
           (when was-dedicated
             (set-window-dedicated-p window was-dedicated))
-          (setq codex-ide--last-accessed-buffer buffer)
           (when codex-ide-focus-on-open
             (select-window window))
           window))
@@ -3043,17 +3038,6 @@ MODE can be nil or `new', `continue', or `resume'."
          (codex-ide--cleanup-session created-session))
        (signal 'quit nil)))))
 
-(defun codex-ide--toggle-existing-window (buffer)
-  "Toggle BUFFER visibility."
-  (if-let ((window (get-buffer-window buffer)))
-      (progn
-        (setq codex-ide--last-accessed-buffer buffer)
-        (delete-window window)
-        (message "Codex window hidden"))
-    (codex-ide--remember-buffer-context-before-switch)
-    (codex-ide--display-buffer-in-side-window buffer)
-    (message "Codex window shown")))
-
 (defun codex-ide--handle-response (&optional session message)
   "Handle a JSON-RPC response MESSAGE for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -3484,7 +3468,7 @@ If no live session exists, prompt to start one."
   (or (let ((session (codex-ide--get-default-session-for-current-buffer)))
         (when (and session (process-live-p (codex-ide-session-process session)))
           session))
-      (when (y-or-n-p "No Codex session for this buffer. Start one? ")
+      (when (y-or-n-p "No Codex session for this workspace. Start one? ")
         (codex-ide--start-session 'new))
       (codex-ide--session-for-current-project)))
 
@@ -3493,107 +3477,6 @@ If no live session exists, prompt to start one."
   "Start Codex for the current project or directory."
   (interactive)
   (codex-ide--start-session 'new))
-
-;;;###autoload
-(defun codex-ide-start-replace-existing ()
-  "Start a new Codex thread in the current session buffer."
-  (interactive)
-  (let ((session (and (derived-mode-p 'codex-ide-session-mode)
-                      (codex-ide--session-for-current-buffer))))
-    (unless session
-      (user-error "Start new (replace existing) is only available in a Codex session buffer"))
-    (when (codex-ide-session-current-turn-id session)
-      (user-error "A Codex turn is already running"))
-    (let ((working-dir (codex-ide-session-directory session))
-          (current-thread-id (codex-ide-session-thread-id session)))
-      (when current-thread-id
-        (codex-ide-log-message
-         session
-         "Unsubscribing thread %s before start-replace"
-         current-thread-id)
-        (ignore-errors
-          (codex-ide--request-sync
-           session
-           "thread/unsubscribe"
-           `((threadId . ,current-thread-id)))))
-      (setf (codex-ide-session-thread-id session) nil)
-      (codex-ide--session-metadata-put session :session-context-sent nil)
-      (codex-ide--reset-session-buffer session)
-      (let ((result (codex-ide--request-sync
-                     session
-                     "thread/start"
-                     (with-current-buffer (codex-ide-session-buffer session)
-                       (codex-ide--thread-start-params)))))
-        (setf (codex-ide-session-thread-id session)
-              (codex-ide--extract-thread-id result))
-        (codex-ide--session-metadata-put session :session-context-sent nil)
-        (codex-ide-log-message
-         session
-         "Started replacement thread %s"
-         (codex-ide-session-thread-id session)))
-      (setf (codex-ide-session-status session) "idle")
-      (codex-ide--update-header-line session)
-      (codex-ide--show-session-buffer session)
-      (codex-ide--ensure-input-prompt session)
-      (message "Codex started in %s"
-               (file-name-nondirectory (directory-file-name working-dir)))
-      session)))
-
-;;;###autoload
-(defun codex-ide-resume ()
-  "Resume a Codex session using an Emacs picker."
-  (interactive)
-  (condition-case nil
-      (codex-ide--start-session 'resume)
-    (quit
-     (message "Codex resume canceled")
-     nil)))
-
-;;;###autoload
-(defun codex-ide-resume-replace-existing ()
-  "Resume a different Codex thread into the current session buffer."
-  (interactive)
-  (let ((session (and (derived-mode-p 'codex-ide-session-mode)
-                      (codex-ide--session-for-current-buffer))))
-    (unless session
-      (user-error "Resume (replace existing) is only available in a Codex session buffer"))
-    (condition-case nil
-        (let* ((working-dir (codex-ide-session-directory session))
-               (current-thread-id (codex-ide-session-thread-id session))
-               (thread (codex-ide--pick-thread session current-thread-id))
-               (thread-id (alist-get 'id thread))
-               (other-session (codex-ide--session-for-thread-id thread-id working-dir)))
-          (when (codex-ide-session-current-turn-id session)
-            (user-error "A Codex turn is already running"))
-          (when (and other-session
-                     (not (eq other-session session)))
-            (let ((other-buffer (codex-ide-session-buffer other-session)))
-              (codex-ide--teardown-session other-session t)
-              (when (buffer-live-p other-buffer)
-                (let ((kill-buffer-query-functions nil))
-                  (kill-buffer other-buffer)))))
-          (when current-thread-id
-            (codex-ide-log-message
-             session
-             "Unsubscribing thread %s before resume-replace"
-             current-thread-id)
-            (ignore-errors
-              (codex-ide--request-sync
-               session
-               "thread/unsubscribe"
-               `((threadId . ,current-thread-id)))))
-          (setf (codex-ide-session-thread-id session) nil)
-          (codex-ide--reset-session-buffer session)
-          (codex-ide--resume-thread-into-session session thread-id "Resumed")
-          (codex-ide--update-header-line session)
-          (codex-ide--show-session-buffer session)
-          (codex-ide--ensure-input-prompt session)
-          (message "Codex resumed in %s"
-                   (file-name-nondirectory (directory-file-name working-dir)))
-          session)
-      (quit
-       (message "Codex resume canceled")
-       nil))))
 
 ;;;###autoload
 (defun codex-ide-continue ()
@@ -3677,9 +3560,13 @@ If no live session exists, prompt to start one."
 (defun codex-ide-switch-to-buffer ()
   "Show the Codex buffer for the current project."
   (interactive)
-  (let* ((session (codex-ide--session-for-current-project))
-         (buffer (codex-ide-session-buffer session)))
-    (codex-ide--display-buffer-in-codex-window buffer)))
+  (let* ((session (codex-ide--ensure-session-for-current-project))
+         (window (codex-ide--display-buffer-in-codex-window
+                  (codex-ide-session-buffer session))))
+    (when window
+      (select-window window))
+    (codex-ide--ensure-input-prompt session)
+    session))
 
 ;;;###autoload
 (defun codex-ide-list-session-buffers ()
@@ -3821,35 +3708,6 @@ If no live session exists for the current buffer, prompt to start one first."
   "Submit the current in-buffer prompt to Codex."
   (interactive)
   (codex-ide--submit-prompt))
-
-;;;###autoload
-(defun codex-ide-toggle ()
-  "Toggle visibility of the Codex window for the current project."
-  (interactive)
-  (if-let* ((session (codex-ide--get-session))
-            (buffer (codex-ide-session-buffer session)))
-      (codex-ide--toggle-existing-window buffer)
-    (user-error "No Codex session for this project")))
-
-;;;###autoload
-(defun codex-ide-toggle-recent ()
-  "Toggle the most recently used Codex window globally."
-  (interactive)
-  (let ((found-visible nil))
-    (dolist (session codex-ide--sessions)
-      (let ((buffer (codex-ide-session-buffer session)))
-        (when (and (buffer-live-p buffer)
-                   (get-buffer-window buffer))
-          (codex-ide--toggle-existing-window buffer)
-          (setq found-visible t))))
-    (cond
-     (found-visible
-      (message "Closed all Codex windows"))
-     ((buffer-live-p codex-ide--last-accessed-buffer)
-      (codex-ide--display-buffer-in-side-window codex-ide--last-accessed-buffer)
-      (message "Opened most recent Codex session"))
-     (t
-      (user-error "No recent Codex session to toggle")))))
 
 (require 'codex-ide-delete-session-thread)
 

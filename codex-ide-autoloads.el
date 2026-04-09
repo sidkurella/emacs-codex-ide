@@ -82,12 +82,6 @@ Major mode for Codex IDE log buffers.
 (fn)" t)
 (autoload 'codex-ide "codex-ide" "\
 Start Codex for the current project or directory." t)
-(autoload 'codex-ide-start-replace-existing "codex-ide" "\
-Start a new Codex thread in the current session buffer." t)
-(autoload 'codex-ide-resume "codex-ide" "\
-Resume a Codex session using an Emacs picker." t)
-(autoload 'codex-ide-resume-replace-existing "codex-ide" "\
-Resume a different Codex thread into the current session buffer." t)
 (autoload 'codex-ide-continue "codex-ide" "\
 Resume the most recent Codex session for the current directory." t)
 (autoload 'codex-ide-check-status "codex-ide" "\
@@ -113,10 +107,6 @@ Jump to the previous user prompt line in the session buffer." t)
 Jump to the next user prompt line in the session buffer." t)
 (autoload 'codex-ide-submit "codex-ide" "\
 Submit the current in-buffer prompt to Codex." t)
-(autoload 'codex-ide-toggle "codex-ide" "\
-Toggle visibility of the Codex window for the current project." t)
-(autoload 'codex-ide-toggle-recent "codex-ide" "\
-Toggle the most recently used Codex window globally." t)
 (register-definition-prefixes "codex-ide" '("codex-ide-" "make-codex-ide-session"))
 
 

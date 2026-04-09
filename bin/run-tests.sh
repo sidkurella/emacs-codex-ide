@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$ROOT_DIR/tests"
-mapfile -t TEST_FILES < <(find "$TEST_DIR" -maxdepth 1 -type f -name '*-tests.el' | sort)
 
 ARGS=(
   -Q
@@ -14,8 +13,8 @@ ARGS=(
   -L "$TEST_DIR"
 )
 
-for test_file in "${TEST_FILES[@]}"; do
+while IFS= read -r test_file; do
   ARGS+=(-l "$test_file")
-done
+done < <(find "$TEST_DIR" -maxdepth 1 -type f -name '*-tests.el' | sort)
 
 exec emacs "${ARGS[@]}" -f ert-run-tests-batch-and-exit

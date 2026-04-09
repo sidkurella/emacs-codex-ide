@@ -12,22 +12,13 @@
 (declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide "codex-ide" ())
-(declare-function codex-ide-start-replace-existing "codex-ide" ())
-(declare-function codex-ide-resume "codex-ide" ())
-(declare-function codex-ide-resume-replace-existing "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
-(declare-function codex-ide-list-session-buffers "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
-(declare-function codex-ide-interrupt "codex-ide" ())
-(declare-function codex-ide-insert-newline "codex-ide" ())
-(declare-function codex-ide-toggle "codex-ide" ())
-(declare-function codex-ide-toggle-recent "codex-ide" ())
 (declare-function codex-ide-check-status "codex-ide" ())
 (declare-function codex-ide--get-working-directory "codex-ide" ())
 (declare-function codex-ide--get-process "codex-ide" ())
-(declare-function codex-ide--ensure-cli "codex-ide" ())
 
 (autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list"
   "Show a tabulated list of live Codex session buffers." t)
@@ -63,41 +54,9 @@
       (propertize
        (format "Active session in [%s]"
                (file-name-nondirectory
-                (directory-file-name (codex-ide--get-working-directory))))
+               (directory-file-name (codex-ide--get-working-directory))))
        'face 'success)
     (propertize "No active session" 'face 'transient-inactive-value)))
-
-(defun codex-ide--start-description ()
-  "Return the dynamic description for the start action."
-  "Start new Codex session")
-
-(defun codex-ide--resume-description ()
-  "Return the dynamic description for the resume action."
-  "Resume with picker")
-
-(defun codex-ide--continue-description ()
-  "Return the dynamic description for the continue action."
-  "Continue most recent")
-
-(defun codex-ide--start-from-menu ()
-  "Start a new Codex session."
-  (interactive)
-  (codex-ide))
-
-(defun codex-ide--start-replace-existing-from-menu ()
-  "Start a new Codex session in the current session buffer."
-  (interactive)
-  (codex-ide-start-replace-existing))
-
-(defun codex-ide--resume-from-menu ()
-  "Resume Codex using the thread picker."
-  (interactive)
-  (codex-ide-resume))
-
-(defun codex-ide--continue-from-menu ()
-  "Continue the most recent Codex session."
-  (interactive)
-  (codex-ide-continue))
 
 (transient-define-suffix codex-ide--set-cli-path (path)
   "Set the Codex CLI path."
@@ -232,25 +191,15 @@
   [:description codex-ide--session-status]
   ["Codex IDE"
    ["Session"
-    ("s" codex-ide--start-from-menu :description codex-ide--start-description)
-    ("S" "Start new (replace existing)" codex-ide--start-replace-existing-from-menu
-     :if codex-ide--in-session-buffer-p)
-    ("c" codex-ide--continue-from-menu :description codex-ide--continue-description)
-    ("r" codex-ide--resume-from-menu :description codex-ide--resume-description)
-    ("R" "Resume (replace existing)" codex-ide-resume-replace-existing
-     :if codex-ide--in-session-buffer-p)
-    ("q" "Stop current session" codex-ide-stop
-     :if codex-ide--in-session-buffer-p)
-    ("l" "List session buffers" codex-ide-session-buffer-list)
-    ("t" "List workspace threads" codex-ide-session-thread-list)]
-   ["Navigation"
-   ("b" "Switch to Codex buffer" codex-ide-switch-to-buffer)
-    ("w" "Toggle current window" codex-ide-toggle)
-    ("W" "Toggle recent window" codex-ide-toggle-recent)]
-   ["Interaction"
-    ("p" "Prompt from minibuffer" codex-ide-prompt)
-    ("e" "Interrupt turn" codex-ide-interrupt)
-    ("n" "Insert newline" codex-ide-insert-newline)]
+    ("b" "Switch to session buffer" codex-ide-switch-to-buffer)
+    ("p" "Send prompt from minibuffer" codex-ide-prompt)
+    ("c" "Continue most recent" codex-ide-continue)
+    ("s" "Start new" codex-ide)
+    ("q" "Stop current" codex-ide-stop
+     :if codex-ide--in-session-buffer-p)]
+   ["View"
+    ("t" "Previous sessions" codex-ide-session-thread-list)
+    ("l" "Live session buffers" codex-ide-session-buffer-list)]
    ["Submenus"
     ("C" "Configuration" codex-ide-config-menu)
     ("d" "Debug" codex-ide-debug-menu)]])

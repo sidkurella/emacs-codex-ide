@@ -14,7 +14,7 @@ Keep the module boundaries clear:
 - `codex-ide-mcp-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
 - `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-mcp-bridge--json-tool-call`.
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
-- `tests/codex-ide-tests.el`: ERT coverage for session setup, command assembly, process handling, bridge config, context composition, and transcript behavior.
+- `tests/*-tests.el`: ERT coverage for session setup, command assembly, process handling, bridge config, context composition, and transcript behavior.
 - `bin/run-tests.sh`: canonical test runner.
 
 Design expectations:
@@ -27,6 +27,7 @@ Design expectations:
 Coding conventions:
 
 - When defining key maps, place the `define-key` calls at the top-level of the package so they will take effect when reloading files.
+- Tests should be organized in files resembling the source code. Ex: tests for "codex-ide-foo.el" should go in "tests/codex-ide-foo-tests.el".
 
 ## Development Rules
 

@@ -22,7 +22,7 @@ keeps the interaction surface fully inside Emacs.
 - Pure Emacs session buffers instead of embedding =vterm= or =eat=
 - Dedicated major modes for Codex session and log buffers
 - Transient menu for common session, navigation, and configuration actions
-- Project-aware session startup, switching, stopping, and resume/continue flows
+- Project-aware session startup, switching, stopping, and continue flows
 - Prompt submission from either the session buffer or the minibuffer
 - Prompt history navigation and in-buffer prompt editing
 - Active-buffer tracking so file, line, and cursor context can be sent to Codex
@@ -141,7 +141,6 @@ buffers, toggling windows, and adjusting configuration.
 | =M-x codex-ide-menu= | Open the main Codex IDE transient menu |
 | =M-x codex-ide= | Start a new Codex session for the current project |
 | =M-x codex-ide-continue= | Continue the most recent Codex session in this directory |
-| =M-x codex-ide-resume= | Resume a Codex session using a picker |
 | =M-x codex-ide-prompt= | Submit a prompt from the minibuffer |
 | =M-x codex-ide-submit= | Submit the current in-buffer prompt |
 | =M-x codex-ide-send-active-buffer-context= | Send the tracked active buffer context as a prompt |
@@ -149,8 +148,6 @@ buffers, toggling windows, and adjusting configuration.
 | =M-x codex-ide-stop= | Stop the current project's Codex session |
 | =M-x codex-ide-switch-to-buffer= | Show the current project's Codex buffer |
 | =M-x codex-ide-list-sessions= | Switch between active Codex sessions |
-| =M-x codex-ide-toggle= | Toggle the current project's Codex window |
-| =M-x codex-ide-toggle-recent= | Toggle the most recently used Codex window globally |
 | =M-x codex-ide-check-status= | Report Codex CLI and bridge status |
 
 Within a session buffer:
@@ -179,9 +176,7 @@ change the prefix with =codex-ide-buffer-name-prefix=.
 ** Window Management
 
 Codex IDE can either reuse regular windows or display buffers in a dedicated
-side window. Running =codex-ide-toggle= hides or reveals the current project's
-session buffer, while =codex-ide-toggle-recent= toggles the most recently used
-Codex buffer from anywhere.
+side window.
 
 By default, =codex-ide-use-side-window= is nil, which keeps display behavior
 closer to normal Emacs buffer switching. If you enable side windows, placement
