@@ -92,6 +92,14 @@ brand-new thread. Resume and continue flows do not resend it."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-buffer-display-when-approval-required t
+  "Whether to display a Codex buffer when it requires approval.
+When nil, approval requests are rendered into their Codex buffer and announced
+with `message', but a non-visible Codex buffer is not displayed."
+  :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
 (defconst codex-ide-display-buffer-options nil
   "Ordered display policy keys for `codex-ide-display-buffer'.
 
@@ -1493,6 +1501,14 @@ CHOICES is an alist of labels to returned values."
      (insert (or (plist-get detail :text) ""))
      (insert "\n"))))
 
+(defun codex-ide--notify-approval-required (session)
+  "Notify the user that SESSION requires approval."
+  (let ((buffer (codex-ide-session-buffer session)))
+    (message "Codex approval required in %s" (buffer-name buffer))
+    (when (or codex-ide-buffer-display-when-approval-required
+              (get-buffer-window buffer 0))
+      (codex-ide--show-session-buffer session))))
+
 (defun codex-ide--render-buffer-approval (session id kind title details choices params)
   "Render an inline approval block for SESSION request ID.
 KIND identifies the approval result shape.  TITLE, DETAILS, CHOICES, and
@@ -1535,7 +1551,7 @@ PARAMS describe the request."
              (codex-ide--pending-approvals session))
     (setf (codex-ide-session-status session) "approval")
     (codex-ide--update-header-line session)
-    (codex-ide--show-session-buffer session)))
+    (codex-ide--notify-approval-required session)))
 
 (defun codex-ide--auto-approve-emacs-bridge-request-p (params)
   "Return non-nil when PARAMS should bypass user approval for the Emacs bridge."

@@ -36,6 +36,11 @@ Prefix used when creating Codex session buffer names.")
 (defvar codex-ide-focus-on-open t "\
 Whether to focus the Codex window after showing it.")
 (custom-autoload 'codex-ide-focus-on-open "codex-ide" t)
+(defvar codex-ide-buffer-display-when-approval-required t "\
+Whether to display a Codex buffer when it requires approval.
+When nil, approval requests are rendered into their Codex buffer and announced
+with `message', but a non-visible Codex buffer is not displayed.")
+(custom-autoload 'codex-ide-buffer-display-when-approval-required "codex-ide" t)
 (defconst codex-ide-display-buffer-options nil "\
 Ordered display policy keys for `codex-ide-display-buffer'.
 

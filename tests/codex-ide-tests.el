@@ -802,7 +802,9 @@
           (should (string= (codex-ide-session-status session) "running")))))))
 
 (ert-deftest codex-ide-command-approval-renders-inline-buttons-and-resolves-on-click ()
-  (let ((project-dir (codex-ide-test--make-temp-project)))
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (displayed-buffer nil)
+        (message-text nil))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let* ((session (codex-ide--create-process-session))
@@ -813,7 +815,12 @@
                      (lambda (_time _repeat function)
                        (funcall function)))
                     ((symbol-function 'codex-ide-display-buffer)
-                     (lambda (_buffer) (selected-window)))
+                     (lambda (buffer)
+                       (setq displayed-buffer buffer)
+                       (selected-window)))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (setq message-text (apply #'format format-string args))))
                     ((symbol-function 'completing-read)
                      (lambda (&rest _)
                        (ert-fail "approval should not use completing-read"))))
@@ -823,6 +830,10 @@
              '((command . "git status")
                (reason . "inspect worktree")
                (proposedExecpolicyAmendment . ["git" "status"]))))
+          (should (eq displayed-buffer (codex-ide-session-buffer session)))
+          (should (equal message-text
+                         (format "Codex approval required in %s"
+                                 (buffer-name (codex-ide-session-buffer session)))))
           (should (string= (codex-ide-session-status session) "approval"))
           (should (string-match-p "Codex:Approval"
                                   (codex-ide--mode-line-status session)))
@@ -891,6 +902,39 @@
             (should-not (button-at (point))))
           (should (= (length (codex-ide-test-process-sent-strings process)) 1)))))))
 
+(ert-deftest codex-ide-command-approval-does-not-display-nonvisible-buffer-when-disabled ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (message-text nil)
+        (codex-ide-buffer-display-when-approval-required nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-current-turn-id session) "turn-approval-hidden"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (&rest _)
+                       (ert-fail "hidden approval buffer should not be displayed")))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (setq message-text (apply #'format format-string args)))))
+            (codex-ide--handle-command-approval
+             session
+             44
+             '((command . "sort"))))
+          (should (string= (codex-ide-session-status session) "approval"))
+          (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
+          (should (equal message-text
+                         (format "Codex approval required in %s"
+                                 (buffer-name (codex-ide-session-buffer session)))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[Approval required\\]"
+                                    (buffer-string)))))))))
+
 (ert-deftest codex-ide-permissions-approval-inline-decline-sends-empty-permissions ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -903,7 +947,9 @@
                      (lambda (_time _repeat function)
                        (funcall function)))
                     ((symbol-function 'codex-ide-display-buffer)
-                     (lambda (_buffer) (selected-window))))
+                     (lambda (_buffer) (selected-window)))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
             (codex-ide--handle-permissions-approval
              session
              43
