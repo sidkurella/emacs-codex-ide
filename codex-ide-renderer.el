@@ -316,25 +316,33 @@ inserted text."
   (when-let* ((total (alist-get 'total token-usage))
               (window (alist-get 'modelContextWindow token-usage))
               (used (alist-get 'totalTokens total)))
-    (let* ((remaining (max 0 (- window used)))
-           (remaining-percent
-            (if (> window 0)
-                (/ (* 100.0 remaining) window)
-              0.0))
-           (last (or (alist-get 'last token-usage) total))
+    (let* ((last (or (alist-get 'last token-usage) total))
            (last-input (alist-get 'inputTokens last))
            (last-cached (alist-get 'cachedInputTokens last))
            (last-output (alist-get 'outputTokens last))
-           (last-reasoning (alist-get 'reasoningOutputTokens last)))
+           (last-reasoning (alist-get 'reasoningOutputTokens last))
+           (context-summary
+            (if (<= used window)
+                (let ((remaining (max 0 (- window used)))
+                      (remaining-percent
+                       (if (> window 0)
+                           (/ (* 100.0 (max 0 (- window used))) window)
+                         0.0)))
+                  (list
+                   (format "ctx: %s/%s"
+                           (codex-ide--format-compact-number used)
+                           (codex-ide--format-compact-number window))
+                   (format "left: %s (%.0f%%%%)"
+                           (codex-ide--format-compact-number remaining)
+                           remaining-percent)))
+              (list
+               (format "thread: %s" (codex-ide--format-compact-number used))
+               (format "win: %s" (codex-ide--format-compact-number window))))))
       (string-join
        (delq nil
-             (list
-              (format "ctx: %s/%s"
-                      (codex-ide--format-compact-number used)
-                      (codex-ide--format-compact-number window))
-              (format "left: %s (%.0f%%%%)"
-                      (codex-ide--format-compact-number remaining)
-                      remaining-percent)
+             (append
+              context-summary
+              (list
               (when (numberp last-input)
                 (format "last in:%s" (codex-ide--format-compact-number last-input)))
               (when (numberp last-cached)
@@ -342,7 +350,7 @@ inserted text."
               (when (numberp last-output)
                 (format "out:%s" (codex-ide--format-compact-number last-output)))
               (when (numberp last-reasoning)
-                (format "reason:%s" (codex-ide--format-compact-number last-reasoning)))))
+                (format "reason:%s" (codex-ide--format-compact-number last-reasoning))))))
        "  "))))
 
 (defun codex-ide--format-reasoning-effort-summary (session)

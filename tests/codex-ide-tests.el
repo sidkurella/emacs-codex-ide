@@ -861,6 +861,24 @@
             (should (string-match-p "effort:high"
                                     (substring-no-properties header-line-format)))))))))
 
+(ert-deftest codex-ide-token-usage-summary-avoids-impossible-context-display ()
+  (let ((summary (codex-ide--format-token-usage-summary
+                  '((total . ((totalTokens . 804900)
+                              (inputTokens . 800000)
+                              (cachedInputTokens . 0)
+                              (outputTokens . 4900)
+                              (reasoningOutputTokens . 0)))
+                    (last . ((totalTokens . 2500)
+                             (inputTokens . 2000)
+                             (cachedInputTokens . 250)
+                             (outputTokens . 250)
+                             (reasoningOutputTokens . 0)))
+                    (modelContextWindow . 258400)))))
+    (should (string-match-p "thread: 804\\.9k" summary))
+    (should (string-match-p "win: 258\\.4k" summary))
+    (should-not (string-match-p "ctx:" summary))
+    (should-not (string-match-p "left:" summary))))
+
 (ert-deftest codex-ide-header-line-shows-model-name ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
