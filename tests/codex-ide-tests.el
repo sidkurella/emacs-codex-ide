@@ -2779,6 +2779,75 @@
                                       contents)))))
       (delete-directory temp-dir t)))))
 
+(ert-deftest codex-ide-render-markdown-region-renders-emphasis ()
+  (with-temp-buffer
+    (insert "This is **bold** and *italic* plus __strong_with_underscores__ and _emphasis_.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "This is bold and italic plus strong_with_underscores and emphasis.\n"))
+    (goto-char (point-min))
+    (search-forward "bold")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "italic")
+    (should (eq (get-text-property (1- (point)) 'face) 'italic))
+    (search-forward "strong_with_underscores")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "emphasis")
+    (should (eq (get-text-property (1- (point)) 'face) 'italic))))
+
+(ert-deftest codex-ide-render-markdown-region-keeps-emphasis-after-rerender ()
+  (with-temp-buffer
+    (insert "This is **bold** and _italic_.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string) "This is bold and italic.\n"))
+    (goto-char (point-min))
+    (search-forward "bold")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "italic")
+    (should (eq (get-text-property (1- (point)) 'face) 'italic))))
+
+(ert-deftest codex-ide-render-markdown-region-keeps-intraword-underscores-literal ()
+  (with-temp-buffer
+    (insert "Keep my_table_id literal.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "Keep my_table_id literal.\n"))
+    (goto-char (point-min))
+    (search-forward "my_table_id")
+    (should-not (text-property-not-all (match-beginning 0) (match-end 0)
+                                       'face nil))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-bold-with-internal-underscores ()
+  (with-temp-buffer
+    (insert "Render **bold_with_underscores** and __strong_with_underscores__.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "Render bold_with_underscores and strong_with_underscores.\n"))
+    (goto-char (point-min))
+    (search-forward "bold_with_underscores")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "strong_with_underscores")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-table-emphasis ()
+  (with-temp-buffer
+    (insert "| Kind | Value |\n| --- | --- |\n| **Bold** | _italic_ |\n| Star bold | **bold_with_underscores** |\n| Underscore bold | __strong_with_underscores__ |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (goto-char (point-min))
+    (search-forward "Bold")
+    (should (memq 'bold
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "italic")
+    (should (memq 'italic
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "bold_with_underscores")
+    (should (memq 'bold
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "strong_with_underscores")
+    (should (memq 'bold
+                  (ensure-list (get-text-property (1- (point)) 'face))))))
+
 (ert-deftest codex-ide-render-markdown-region-caches-code-block-font-lock-setup ()
   (let ((codex-ide--font-lock-spec-cache (make-hash-table :test 'eq))
         (mode-call-count 0))

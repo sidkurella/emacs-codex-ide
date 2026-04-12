@@ -685,8 +685,24 @@ When LIMIT is non-nil, do not move beyond it."
 (defconst codex-ide--markdown-table-inline-pattern
   (concat
    "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)"
-   "\\|`\\([^`\n]+\\)`")
-  "Pattern for safe inline markdown supported inside rendered tables.")
+   "\\|`\\([^`\n]+\\)`"
+   "\\|\\(\\*\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\*\\)"
+   "\\|\\(__\\([^_\n ]\\(?:[^\n]*?[^_\n ]\\)?\\)__\\)"
+   "\\|\\(\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\)"
+   "\\|\\(_\\([^_\n ]\\(?:[^_\n]*[^_\n ]\\)?\\)_\\)")
+  "Pattern for inline markdown supported inside rendered tables.")
+
+(defun codex-ide--markdown-inline-word-char-p (char)
+  "Return non-nil when CHAR is a word-like markdown delimiter neighbor."
+  (and char
+       (string-match-p "[[:alnum:]_]" (char-to-string char))))
+
+(defun codex-ide--markdown-inline-underscore-boundary-p (text start end)
+  "Return non-nil when underscores at START and END in TEXT are markdown delimiters."
+  (and (not (codex-ide--markdown-inline-word-char-p
+             (and (> start 0) (aref text (1- start)))))
+       (not (codex-ide--markdown-inline-word-char-p
+             (and (< end (length text)) (aref text end))))))
 
 (defun codex-ide--markdown-table-render-cell (cell)
   "Return CELL rendered as visible table text."
@@ -723,11 +739,62 @@ When LIMIT is non-nil, do not move beyond it."
          ((match-beginning 4)
           (push (propertize (match-string 4 cell)
                             'face 'font-lock-keyword-face)
-                parts)))
+                parts))
+         ((match-beginning 6)
+          (push (propertize (match-string 6 cell) 'face 'bold) parts))
+         ((match-beginning 8)
+          (push
+           (if (codex-ide--markdown-inline-underscore-boundary-p
+                cell match-start match-end)
+               (propertize (match-string 8 cell) 'face 'bold)
+             (match-string 0 cell))
+           parts))
+         ((match-beginning 10)
+          (push (propertize (match-string 10 cell) 'face 'italic) parts))
+         ((match-beginning 12)
+          (push
+           (if (codex-ide--markdown-inline-underscore-boundary-p
+                cell match-start match-end)
+               (propertize (match-string 12 cell) 'face 'italic)
+             (match-string 0 cell))
+           parts)))
         (setq pos match-end)))
     (when (< pos (length cell))
       (push (substring cell pos) parts))
     (apply #'concat (nreverse parts))))
+
+(defun codex-ide--markdown-region-unrendered-p (start end)
+  "Return non-nil when START to END has no markdown-rendered text."
+  (not (text-property-not-all start end 'codex-ide-markdown nil)))
+
+(defun codex-ide--markdown-emphasis-underscore-boundary-p (start end)
+  "Return non-nil when underscores from START to END are markdown delimiters."
+  (and (not (codex-ide--markdown-inline-word-char-p
+             (char-before start)))
+       (not (codex-ide--markdown-inline-word-char-p
+             (char-after end)))))
+
+(defun codex-ide--render-markdown-emphasis (start end pattern face &optional underscore)
+  "Render markdown emphasis matching PATTERN with FACE between START and END.
+PATTERN must capture the full marked span in group 2 and content in group 3.
+When UNDERSCORE is non-nil, reject intraword underscore delimiters."
+  (goto-char start)
+  (while (re-search-forward pattern end t)
+    (let ((span-start (match-beginning 2))
+          (span-end (match-end 2))
+          (content-start (match-beginning 3))
+          (content-end (match-end 3)))
+      (when (and (codex-ide--markdown-region-unrendered-p span-start span-end)
+                 (or (not underscore)
+                     (codex-ide--markdown-emphasis-underscore-boundary-p
+                      span-start span-end)))
+        (let ((content-length (- content-end content-start)))
+          (add-text-properties
+           content-start content-end
+           `(face ,face))
+          (delete-region content-end span-end)
+          (delete-region span-start content-start)
+          (goto-char (+ span-start content-length)))))))
 
 (defun codex-ide--markdown-table-pad-cell (cell width alignment)
   "Return CELL padded to WIDTH using ALIGNMENT."
@@ -981,6 +1048,28 @@ END; this keeps streamed partial tables from being reformatted on every delta."
              code-end (match-end 0)
              '(display ""
                codex-ide-markdown t)))))
+      (codex-ide--render-markdown-emphasis
+       start
+       (marker-position end-marker)
+       "\\(^\\|[^*]\\)\\(\\*\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\*\\)"
+       'bold)
+      (codex-ide--render-markdown-emphasis
+       start
+       (marker-position end-marker)
+       "\\(^\\|[^_]\\)\\(__\\([^_\n ]\\(?:[^\n]*?[^_\n ]\\)?\\)__\\)"
+       'bold
+       t)
+      (codex-ide--render-markdown-emphasis
+       start
+       (marker-position end-marker)
+       "\\(^\\|[^*]\\)\\(\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\)"
+       'italic)
+      (codex-ide--render-markdown-emphasis
+       start
+       (marker-position end-marker)
+       "\\(^\\|[^_]\\)\\(_\\([^_\n ]\\(?:[^_\n]*[^_\n ]\\)?\\)_\\)"
+       'italic
+       t)
       (set-marker end-marker nil))))
 
 (defun codex-ide--insert-input-prompt (&optional session initial-text)
