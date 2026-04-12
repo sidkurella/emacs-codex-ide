@@ -316,33 +316,32 @@ inserted text."
   (when-let* ((total (alist-get 'total token-usage))
               (window (alist-get 'modelContextWindow token-usage))
               (used (alist-get 'totalTokens total)))
-    (let* ((last (or (alist-get 'last token-usage) total))
+    (let* ((live-context-known (<= used window))
+           (remaining (and live-context-known (max 0 (- window used))))
+           (remaining-percent
+            (and live-context-known
+                 (> window 0)
+                 (/ (* 100.0 remaining) window)))
+           (last (or (alist-get 'last token-usage) total))
            (last-input (alist-get 'inputTokens last))
            (last-cached (alist-get 'cachedInputTokens last))
            (last-output (alist-get 'outputTokens last))
-           (last-reasoning (alist-get 'reasoningOutputTokens last))
-           (context-summary
-            (if (<= used window)
-                (let ((remaining (max 0 (- window used)))
-                      (remaining-percent
-                       (if (> window 0)
-                           (/ (* 100.0 (max 0 (- window used))) window)
-                         0.0)))
-                  (list
-                   (format "ctx: %s/%s"
-                           (codex-ide--format-compact-number used)
-                           (codex-ide--format-compact-number window))
-                   (format "left: %s (%.0f%%%%)"
-                           (codex-ide--format-compact-number remaining)
-                           remaining-percent)))
-              (list
-               (format "thread: %s" (codex-ide--format-compact-number used))
-               (format "win: %s" (codex-ide--format-compact-number window))))))
+           (last-reasoning (alist-get 'reasoningOutputTokens last)))
       (string-join
        (delq nil
-             (append
-              context-summary
-              (list
+             (list
+              (format "ctx: %s/%s"
+                      (if live-context-known
+                          (codex-ide--format-compact-number used)
+                        "?")
+                      (codex-ide--format-compact-number window))
+              (if live-context-known
+                  (format "left: %s (%.0f%%%%)"
+                          (codex-ide--format-compact-number remaining)
+                          (or remaining-percent 0.0))
+                "left: ?")
+              (unless live-context-known
+                (format "thread: %s" (codex-ide--format-compact-number used)))
               (when (numberp last-input)
                 (format "last in:%s" (codex-ide--format-compact-number last-input)))
               (when (numberp last-cached)
@@ -350,7 +349,7 @@ inserted text."
               (when (numberp last-output)
                 (format "out:%s" (codex-ide--format-compact-number last-output)))
               (when (numberp last-reasoning)
-                (format "reason:%s" (codex-ide--format-compact-number last-reasoning))))))
+                (format "reason:%s" (codex-ide--format-compact-number last-reasoning)))))
        "  "))))
 
 (defun codex-ide--format-reasoning-effort-summary (session)
@@ -1310,7 +1309,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
        (let ((count (length (or (alist-get 'changes item) '()))))
          (format "Prepared %d file change%s" count (if (= count 1) "" "s"))))
       ("contextCompaction"
-       "Compacted conversation context")
+       "[Context compacted]")
       ("imageView"
        (format "Viewed image %s" (or (alist-get 'path item) "")))
       ("enteredReviewMode"
@@ -1384,6 +1383,31 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
           (codex-ide--item-detail-line path)
           'codex-ide-item-detail-face))))))
 
+(defun codex-ide--render-context-compaction-event (&optional session turn-id)
+  "Render a context-compaction transcript marker for SESSION.
+When TURN-ID is non-nil, deduplicate markers within the same turn."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((current-turn-id (or turn-id (codex-ide-session-current-turn-id session))))
+    (unless (and current-turn-id
+                 (equal current-turn-id
+                        (codex-ide--session-metadata-get
+                         session
+                         :last-context-compaction-turn-id)))
+      (let ((buffer (codex-ide-session-buffer session))
+            (codex-ide--current-agent-item-type "contextCompaction"))
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session))
+        (codex-ide--ensure-output-spacing buffer)
+        (codex-ide--append-agent-text
+         buffer
+         "[Context compacted]\n"
+         'codex-ide-item-summary-face))
+      (when current-turn-id
+        (codex-ide--session-metadata-put
+         session
+         :last-context-compaction-turn-id
+         current-turn-id)))))
+
 (defun codex-ide--render-item-start (&optional session item)
   "Render a newly started ITEM for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -1392,7 +1416,10 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
          (item-type (alist-get 'type item))
          (summary (codex-ide--summarize-item-start item)))
     (let ((codex-ide--current-agent-item-type item-type))
-      (when summary
+      (when (equal item-type "contextCompaction")
+        (codex-ide--render-context-compaction-event session))
+      (when (and summary
+                 (not (equal item-type "contextCompaction")))
         (unless (codex-ide-session-output-prefix-inserted session)
           (codex-ide--begin-turn-display session))
         (codex-ide--ensure-output-spacing buffer)
