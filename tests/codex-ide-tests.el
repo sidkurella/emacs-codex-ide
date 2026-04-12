@@ -819,10 +819,43 @@
                              (outputTokens . 250)
                              (reasoningOutputTokens . 0)))
                     (modelContextWindow . 258400)))))
-    (should (string-match-p "thread: 804\\.9k" summary))
-    (should (string-match-p "win: 258\\.4k" summary))
-    (should-not (string-match-p "ctx:" summary))
-    (should-not (string-match-p "left:" summary))))
+    (should (string-match-p "ctx: \\?/258\\.4k" summary))
+    (should (string-match-p "left: \\?" summary))
+    (should (string-match-p "thread: 804\\.9k" summary))))
+
+(ert-deftest codex-ide-context-compaction-item-renders-transcript-marker ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-compact-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/started")
+             (params . ((item . ((id . "compact-1")
+                                 (type . "contextCompaction")))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[Context compacted\\]" (buffer-string)))))))))
+
+(ert-deftest codex-ide-thread-compacted-notification-renders-transcript-marker ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-compact-2")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "thread/compacted")
+             (params . ((threadId . "thread-compact-2")
+                        (turnId . "turn-compact-2")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[Context compacted\\]" (buffer-string)))))))))
 
 (ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
   (let ((project-dir (codex-ide-test--make-temp-project))

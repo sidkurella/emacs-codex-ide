@@ -1900,6 +1900,14 @@ PARAMS describe the request."
           (alist-get 'totalTokens (alist-get 'total token-usage))
           (alist-get 'modelContextWindow token-usage))
          (codex-ide--update-header-line session)))
+      ("thread/compacted"
+       (codex-ide-log-message
+        session
+        "Thread context compacted for turn %s"
+        (or (alist-get 'turnId params) "unknown"))
+       (codex-ide--render-context-compaction-event
+        session
+        (alist-get 'turnId params)))
       ("account/rateLimits/updated"
        (let ((rate-limits (alist-get 'rateLimits params)))
          (codex-ide--session-metadata-put session :rate-limits rate-limits)
