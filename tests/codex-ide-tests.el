@@ -301,7 +301,9 @@
                        (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--start-session 'new)))
             (should (string= (codex-ide-session-thread-id session) "thread-test-1"))
-            (should (equal (mapcar #'car (nreverse requests))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (mapcar #'car (nreverse requests)))
                            '("initialize" "thread/start")))
             (with-current-buffer (codex-ide-session-buffer session)
               (should (derived-mode-p 'codex-ide-session-mode))
@@ -443,7 +445,10 @@
                           project-dir)))
             (should (codex-ide-session-p session))
             (should (memq session codex-ide--sessions))
-            (should (equal (nreverse requests) '("initialize")))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (nreverse requests))
+                           '("initialize")))
             (should (string= (codex-ide-session-status session) "idle"))))))))
 
 (ert-deftest codex-ide-show-session-buffer-adds-prompt-to-idle-query-session ()
@@ -463,7 +468,10 @@
                           project-dir)))
             (should-not (codex-ide--input-prompt-active-p session))
             (codex-ide--show-session-buffer session)
-            (should (equal (nreverse requests) '("initialize")))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (nreverse requests))
+                           '("initialize")))
             (should (codex-ide--input-prompt-active-p session))
             (with-current-buffer (codex-ide-session-buffer session)
               (goto-char (marker-position
@@ -503,7 +511,9 @@
                                                              project-dir)))
               (should (eq session query-session))
               (should (= (length codex-ide--sessions) 1))
-              (should (equal (nreverse requests)
+              (should (equal (seq-remove (lambda (method)
+                                           (equal method "config/read"))
+                                         (nreverse requests))
                              '("thread/read" "thread/resume")))
               (should (string= (codex-ide-session-thread-id session)
                                "thread-reused-1"))
@@ -813,6 +823,110 @@
             (should (string-match-p "effort:high"
                                     (substring-no-properties header-line-format)))))))))
 
+(ert-deftest codex-ide-header-line-shows-model-name ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model "gpt-5.4"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "model:gpt-5\\.4"
+                                    (substring-no-properties header-line-format)))))))))
+
+(ert-deftest codex-ide-header-line-uses-server-model-when-local-model-is-unset ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--server-model-name)
+                     (lambda (_session)
+                       "gpt-5.4-mini")))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--update-header-line session)
+              (should (string-match-p "model:gpt-5\\.4-mini"
+                                      (substring-no-properties header-line-format))))))))))
+
+(ert-deftest codex-ide-available-model-names-queries-model-list ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requested-method nil)
+        (requested-params nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                     (lambda () t))
+                    ((symbol-function 'codex-ide--cleanup-dead-sessions)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-active-buffer-tracking)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--query-session-for-thread-selection)
+                     (lambda (&optional _directory) session))
+                    ((symbol-function 'codex-ide--request-sync)
+                     (lambda (_session method params)
+                       (setq requested-method method
+                             requested-params params)
+                       '((data . (((id . "gpt-5.4") (model . "gpt-5.4"))
+                                  ((id . "gpt-5.4-mini") (model . "gpt-5.4-mini"))))
+                         (nextCursor . nil)))))
+            (should (equal (codex-ide--available-model-names)
+                           '("gpt-5.4" "gpt-5.4-mini")))
+            (should (equal requested-method "model/list"))
+            (should (equal requested-params '((limit . 100))))))))))
+
+(ert-deftest codex-ide-server-model-name-prefers-config-read-model ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method _params callback)
+                       (push method requests)
+                       (funcall callback
+                                '((config . ((model . "gpt-5.4"))))
+                                nil)
+                       1)))
+            (should-not (codex-ide--server-model-name session))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal (codex-ide--server-model-name session) "gpt-5.4"))
+            (should (equal requests '("config/read")))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal requests '("config/read")))))))))
+
+(ert-deftest codex-ide-server-model-name-falls-back-to-default-model-list-entry ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method _params callback)
+                       (push method requests)
+                       (pcase method
+                         ("config/read"
+                          (funcall callback '((config . ((approvalPolicy . "never")))) nil))
+                         ("model/list"
+                          (funcall callback
+                                   '((data . (((id . "gpt-5.4-mini")
+                                               (model . "gpt-5.4-mini")
+                                               (isDefault . t))
+                                              ((id . "gpt-5.4")
+                                               (model . "gpt-5.4")
+                                               (isDefault . :json-false))))
+                                     (nextCursor . nil))
+                                   nil))
+                         (_
+                          (ert-fail (format "Unexpected method %s" method))))
+                       1)))
+            (should-not (codex-ide--server-model-name session))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal (codex-ide--server-model-name session)
+                           "gpt-5.4-mini"))
+            (should (equal requests
+                           '("model/list" "config/read")))))))))
+
 (ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (response-result nil)
@@ -839,7 +953,8 @@
 (ert-deftest codex-ide-command-approval-renders-inline-buttons-and-resolves-on-click ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (displayed-buffer nil)
-        (message-text nil))
+        (message-text nil)
+        (codex-ide-model "gpt-5.4"))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let* ((session (codex-ide--create-process-session))
@@ -1029,10 +1144,16 @@
             (search-forward "[accept]")
             (backward-char 1)
             (push-button))
-          (let* ((payload (json-parse-string
-                           (car (codex-ide-test-process-sent-strings process))
-                           :object-type 'alist
-                           :array-type 'list)))
+          (let* ((payloads
+                  (mapcar (lambda (json)
+                            (json-parse-string json
+                                               :object-type 'alist
+                                               :array-type 'list))
+                          (codex-ide-test-process-sent-strings process)))
+                 (payload (seq-find (lambda (item)
+                                      (equal (alist-get 'id item) 45))
+                                    payloads)))
+            (should payload)
             (should (equal (alist-get 'id payload) 45))
             (should (equal (alist-get 'decision (alist-get 'result payload))
                            "accept")))
@@ -1089,11 +1210,17 @@
             (search-forward "[decline]")
             (backward-char 1)
             (push-button))
-          (let* ((payload (json-parse-string
-                           (car (codex-ide-test-process-sent-strings process))
-                           :object-type 'alist
-                           :array-type 'list))
+          (let* ((payloads
+                  (mapcar (lambda (json)
+                            (json-parse-string json
+                                               :object-type 'alist
+                                               :array-type 'list))
+                          (codex-ide-test-process-sent-strings process)))
+                 (payload (seq-find (lambda (item)
+                                      (equal (alist-get 'id item) 43))
+                                    payloads))
                  (result (alist-get 'result payload)))
+            (should payload)
             (should (equal (alist-get 'id payload) 43))
             (should (equal (alist-get 'permissions result) nil))
             (should-not (alist-get 'scope result))))))))
@@ -1625,7 +1752,9 @@
                        (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--start-session 'resume)))
             (should (string= (codex-ide-session-thread-id session) "thread-resume-1"))
-            (should (equal (mapcar #'car (nreverse requests))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (mapcar #'car (nreverse requests)))
                            '("initialize" "thread/read" "thread/resume")))
             (with-current-buffer (codex-ide-session-buffer session)
               (let ((buffer-text (buffer-string)))
@@ -1720,7 +1849,9 @@
                 (should-not (eq new-session original-session))
                 (should (string= (codex-ide-session-thread-id new-session)
                                  "thread-resume-2"))
-                (should (equal (nreverse requests)
+                (should (equal (seq-remove (lambda (method)
+                                             (equal method "config/read"))
+                                           (nreverse requests))
                                '("initialize" "thread/read" "thread/resume")))
                 (with-current-buffer (codex-ide-session-buffer new-session)
                   (should (string-match-p "^> Switch threads"
@@ -1970,7 +2101,9 @@
             (with-current-buffer buffer
               (should (eq (codex-ide--session-for-current-buffer) new-session))
               (should-not (string-match-p "old transcript" (buffer-string))))
-            (should (equal requests
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       requests)
                            '("thread/unsubscribe"
                              "initialize"
                              "thread/start")))))))))

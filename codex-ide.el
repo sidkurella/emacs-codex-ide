@@ -788,8 +788,27 @@ The result is an alist with `formatted' and `summary' entries."
       (codex-ide-log-message session "Request %s (id=%s) timed out" method id)
       (error "Timed out waiting for %s" method))
      (t
-      (codex-ide-log-message session "Request %s (id=%s) completed" method id)
+     (codex-ide-log-message session "Request %s (id=%s) completed" method id)
       result))))
+
+(defun codex-ide--request-async (session method params callback)
+  "Send METHOD with PARAMS to SESSION and invoke CALLBACK on response."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let* ((id (codex-ide--next-request-id session))
+         (pending (codex-ide-session-pending-requests session)))
+    (codex-ide-log-message session "Starting asynchronous request %s (id=%s)" method id)
+    (puthash id
+             (lambda (response-result response-error)
+               (remhash id pending)
+               (funcall callback response-result response-error))
+             pending)
+    (codex-ide--jsonrpc-send session `((jsonrpc . "2.0")
+                                       (id . ,id)
+                                       (method . ,method)
+                                       (params . ,params)))
+    id))
 
 (defun codex-ide--thread-start-params ()
   "Build `thread/start` params for the current working directory."
@@ -1013,6 +1032,143 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
                     )))
          (data (alist-get 'data result)))
     (append data nil)))
+
+(defun codex-ide--list-models (&optional session)
+  "List available models using SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let ((cursor nil)
+        (models nil)
+        (page nil))
+    (while
+        (progn
+          (setq page
+                (codex-ide--request-sync
+                 session
+                 "model/list"
+                 (delq nil
+                       `((limit . 100)
+                         ,@(when cursor
+                             `((cursor . ,cursor)))))))
+          (setq models (nconc models (append (alist-get 'data page) nil))
+                cursor (alist-get 'nextCursor page))
+          cursor))
+    models))
+
+(defun codex-ide--config-read (&optional session)
+  "Read the effective app-server configuration using SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (codex-ide--request-sync session "config/read" '()))
+
+(defun codex-ide--extract-model-from-config (config)
+  "Extract a configured model string from CONFIG, or nil."
+  (let* ((root (or (alist-get 'config config)
+                   (alist-get 'effectiveConfig config)
+                   config))
+         (settings (or (codex-ide--alist-get-safe 'settings root)
+                       (codex-ide--alist-get-safe 'config root)))
+         (model (or (codex-ide--alist-get-safe 'model root)
+                    (codex-ide--alist-get-safe 'model settings))))
+    (when (and (stringp model)
+               (not (string-empty-p model)))
+      model)))
+
+(defun codex-ide--default-model-name (&optional session)
+  "Return the server-recommended default model name using SESSION."
+  (when-let* ((models (codex-ide--list-models session))
+              (default-model (seq-find
+                              (lambda (model)
+                                (not (memq (alist-get 'isDefault model)
+                                           '(nil :json-false))))
+                              models))
+              (name (or (alist-get 'model default-model)
+                        (alist-get 'id default-model))))
+    (and (stringp name)
+         (not (string-empty-p name))
+         name)))
+
+(defun codex-ide--server-model-name (&optional session)
+  "Return the cached server-derived model name for SESSION, or nil."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let ((cached (codex-ide--session-metadata-get session :server-model-name)))
+    (unless (eq cached :unknown)
+      cached)))
+
+(defun codex-ide--handle-server-model-name-resolved (session model)
+  "Store MODEL for SESSION and refresh the header line."
+  (codex-ide--session-metadata-put session :server-model-name (or model :unknown))
+  (when (buffer-live-p (codex-ide-session-buffer session))
+    (codex-ide--update-header-line session)))
+
+(defun codex-ide--request-default-model-name-async (session)
+  "Request the server default model for SESSION without blocking."
+  (codex-ide--request-async
+   session
+   "model/list"
+   '((limit . 100))
+   (lambda (result error)
+     (let ((model
+            (unless error
+              (when-let* ((models (append (alist-get 'data result) nil))
+                          (default-model (seq-find
+                                          (lambda (entry)
+                                            (not (memq (alist-get 'isDefault entry)
+                                                       '(nil :json-false))))
+                                          models))
+                          (name (or (alist-get 'model default-model)
+                                    (alist-get 'id default-model))))
+                (and (stringp name)
+                     (not (string-empty-p name))
+                     name)))))
+       (codex-ide--handle-server-model-name-resolved session model)))))
+
+(defun codex-ide--ensure-server-model-name (&optional session)
+  "Request SESSION's server-derived model name once, without blocking."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when (and session
+             (not (codex-ide--session-metadata-get session :server-model-name))
+             (not (eq (codex-ide--session-metadata-get session :server-model-name)
+                      :unknown))
+             (not (codex-ide--session-metadata-get session :server-model-name-requested))
+             (process-live-p (codex-ide-session-process session)))
+    (codex-ide--session-metadata-put session :server-model-name-requested t)
+    (codex-ide--request-async
+     session
+     "config/read"
+     '()
+     (lambda (result error)
+       (if error
+           (codex-ide--request-default-model-name-async session)
+         (let ((model (codex-ide--extract-model-from-config result)))
+           (if model
+               (codex-ide--handle-server-model-name-resolved session model)
+             (codex-ide--request-default-model-name-async session))))))))
+
+(defun codex-ide--available-model-names ()
+  "Return visible model names for the current workspace, or nil on failure."
+  (condition-case nil
+      (progn
+        (unless (codex-ide--ensure-cli)
+          (error "Codex CLI not available"))
+        (codex-ide--cleanup-dead-sessions)
+        (codex-ide--ensure-active-buffer-tracking)
+        (let* ((working-dir (codex-ide--get-working-directory))
+               (session (or (codex-ide--query-session-for-thread-selection working-dir)
+                            (codex-ide--ensure-query-session-for-thread-selection
+                             working-dir)))
+               (models (codex-ide--list-models session)))
+          (delete-dups
+           (delq nil
+                 (mapcar (lambda (model)
+                           (or (alist-get 'model model)
+                               (alist-get 'id model)))
+                         models)))))
+    (error nil)))
 
 (defun codex-ide--thread-list-data (&optional session omit-thread-id)
   "Return thread list data using SESSION.

@@ -17,7 +17,9 @@
 
 (declare-function codex-ide--extract-error-text "codex-ide" (&rest values))
 (declare-function codex-ide--classify-session-error "codex-ide" (&rest values))
+(declare-function codex-ide--ensure-server-model-name "codex-ide" (&optional session))
 (declare-function codex-ide--format-session-error-summary "codex-ide" (classification &optional prefix))
+(declare-function codex-ide--server-model-name "codex-ide" (&optional session))
 (declare-function codex-ide--sanitize-ansi-text "codex-ide" (text))
 (declare-function codex-ide--session-for-current-project "codex-ide" ())
 (declare-function codex-ide--strip-emacs-context-prefix "codex-ide" (text))
@@ -28,8 +30,10 @@
 (declare-function codex-ide-log-message "codex-ide" (session format-string &rest args))
 
 (defvar codex-ide-log-max-lines)
+(defvar codex-ide-model)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
+(defvar codex-ide--sessions)
 ;; Cached to avoid repeated feature loading during streamed rendering.
 (defvar codex-ide--markdown-display-mode-function-cache 'unset)
 
@@ -349,6 +353,20 @@ inserted text."
                          codex-ide-reasoning-effort)))
     (format "effort:%s" effort)))
 
+(defun codex-ide--format-model-summary (&optional session)
+  "Return a compact header summary for SESSION's model."
+  (let ((model (or (and (stringp codex-ide-model)
+                        (not (string-empty-p codex-ide-model))
+                        codex-ide-model)
+                   (and session
+                        (codex-ide--server-model-name session)))))
+    (unless (or model
+                (and (stringp codex-ide-model)
+                     (not (string-empty-p codex-ide-model))))
+      (codex-ide--ensure-server-model-name session))
+    (when model
+      (format "model:%s" model))))
+
 (defun codex-ide--format-rate-limit-summary (rate-limits)
   "Return a compact header summary for RATE-LIMITS."
   (when-let* ((primary (alist-get 'primary rate-limits))
@@ -377,6 +395,8 @@ inserted text."
              (rate-limit-summary
               (codex-ide--format-rate-limit-summary
                (codex-ide--session-metadata-get session :rate-limits)))
+             (model-summary
+              (codex-ide--format-model-summary session))
              (effort-summary
               (codex-ide--format-reasoning-effort-summary session)))
         (setq header-line-format
@@ -385,12 +405,19 @@ inserted text."
                 (delq nil
                       (list
                        (format "focus: %s" focus)
+                       model-summary
                        effort-summary
                        token-summary
                        rate-limit-summary))
                 "  ")
                'face 'codex-ide-header-line-face)))
       (codex-ide--update-mode-line session))))
+
+(defun codex-ide--refresh-all-session-header-lines ()
+  "Refresh header lines for all live Codex session buffers."
+  (dolist (session codex-ide--sessions)
+    (when (buffer-live-p (codex-ide-session-buffer session))
+      (codex-ide--update-header-line session))))
 
 (defun codex-ide--parse-file-link-target (target)
   "Parse markdown file TARGET into (PATH LINE COLUMN), or nil."
