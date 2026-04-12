@@ -25,6 +25,10 @@
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "p")) :command)
               #'codex-ide-prompt)))
 
+(ert-deftest codex-ide-debug-menu-exposes-show-debug-info ()
+  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-debug-menu "i")) :command)
+              #'codex-ide-show-debug-info)))
+
 (provide 'codex-ide-transient-tests)
 
 ;;; codex-ide-transient-tests.el ends here

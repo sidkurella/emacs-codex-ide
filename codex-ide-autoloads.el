@@ -335,6 +335,12 @@ that session and then remove the persisted thread data from disk.
 (register-definition-prefixes "codex-ide-renderer" '("codex-ide-"))
 
 
+;;; Generated autoloads from codex-ide-debug-info.el
+
+(autoload 'codex-ide-show-debug-info "codex-ide-debug-info" "\
+Show a minibuffer summary of live Codex IDE session state." t)
+(register-definition-prefixes "codex-ide-debug-info" '("codex-ide-debug-info--"))
+
 ;;; End of scraped data
 
 (provide 'codex-ide-autoloads)

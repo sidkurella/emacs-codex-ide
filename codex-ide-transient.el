@@ -18,6 +18,8 @@
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-check-status "codex-ide" ())
+(autoload 'codex-ide-show-debug-info "codex-ide-debug-info"
+  "Show a minibuffer summary of live Codex IDE session state." t)
 (declare-function codex-ide--get-working-directory "codex-ide-core" ())
 (declare-function codex-ide--get-process "codex-ide-core" ())
 
@@ -213,7 +215,8 @@
   "Open a small debug/status menu for Codex IDE."
   ["Codex IDE Debug"
    ["Status"
-    ("s" "Check CLI status" codex-ide-check-status)]])
+    ("s" "Check CLI status" codex-ide-check-status)
+    ("i" "Show debug info" codex-ide-show-debug-info)]])
 
 (provide 'codex-ide-transient)
 
