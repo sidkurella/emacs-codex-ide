@@ -89,8 +89,7 @@
     (should (equal (codex-ide--read-model) "manual-model"))))
 
 (ert-deftest codex-ide-set-model-updates-global-default ()
-  (let ((codex-ide-model nil)
-        (message-text nil))
+  (let ((codex-ide-model nil))
     (cl-letf (((symbol-function 'message)
                (lambda (&rest _) nil)))
       (codex-ide--set-model "gpt-5.4"))
