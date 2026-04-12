@@ -354,6 +354,13 @@
   (let ((codex-ide-session-baseline-prompt "   "))
     (should-not (codex-ide--format-session-context))))
 
+(ert-deftest codex-ide-session-baseline-prompt-default-includes-table-guidance ()
+  (let ((formatted (codex-ide--format-session-context)))
+    (should (string-match-p "Responses are rendered as Markdown in an Emacs buffer" formatted))
+    (should (string-match-p "Markdown pipe tables are rendered as visible tables" formatted))
+    (should (string-match-p "wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks" formatted))
+    (should (string-match-p "Avoid bare underscores or asterisks for code-like text inside tables" formatted))))
+
 (ert-deftest codex-ide-thread-choice-candidates-disambiguate-duplicate-previews ()
   (let* ((first-thread '((id . "thread-12345678")
                          (preview . "Investigate failure")))
