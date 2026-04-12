@@ -671,12 +671,8 @@ When LIMIT is non-nil, do not move beyond it."
 (defconst codex-ide--markdown-table-inline-pattern
   (concat
    "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)"
-   "\\|`\\([^`\n]+\\)`"
-   "\\|\\*\\*\\([^*\n]+\\)\\*\\*"
-   "\\|__\\([^_\n]+\\)__"
-   "\\|\\*\\([^*\n]+\\)\\*"
-   "\\|_\\([^_\n]+\\)_")
-  "Pattern for simple inline markdown supported inside rendered tables.")
+   "\\|`\\([^`\n]+\\)`")
+  "Pattern for safe inline markdown supported inside rendered tables.")
 
 (defun codex-ide--markdown-table-render-cell (cell)
   "Return CELL rendered as visible table text."
@@ -713,16 +709,6 @@ When LIMIT is non-nil, do not move beyond it."
          ((match-beginning 4)
           (push (propertize (match-string 4 cell)
                             'face 'font-lock-keyword-face)
-                parts))
-         ((or (match-beginning 5) (match-beginning 6))
-          (push (propertize (or (match-string 5 cell)
-                                (match-string 6 cell))
-                            'face 'bold)
-                parts))
-         ((or (match-beginning 7) (match-beginning 8))
-          (push (propertize (or (match-string 7 cell)
-                                (match-string 8 cell))
-                            'face 'italic)
                 parts)))
         (setq pos match-end)))
     (when (< pos (length cell))
