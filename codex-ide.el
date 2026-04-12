@@ -1952,7 +1952,7 @@ PARAMS describe the request."
            (codex-ide--append-agent-text buffer delta)
            (when-let ((start (codex-ide-session-current-message-start-marker session)))
              (with-current-buffer buffer
-               (codex-ide--render-markdown-region start (point-max)))))))
+               (codex-ide--render-markdown-region start (point-max) nil))))))
       ("item/commandExecution/outputDelta"
        (let ((item-id (alist-get 'itemId params)))
          (codex-ide-log-message

@@ -1537,6 +1537,28 @@
              "\n\n> What is MyTable's primary key\\?")
             (buffer-string))))))))
 
+(ert-deftest codex-ide-restore-thread-read-transcript-renders-trailing-pipe-tables ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          '((thread . ((id . "thread-restore-table-1")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Show a table")))))
+                                            ((type . "agentMessage")
+                                             (id . "item-1")
+                                             (text . "| Number | Square |\n| --- | ---: |\n| 1 | 1 |\n| 2 | 4 |\n"))))))))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should (codex-ide--restore-thread-read-transcript session thread-read))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (let ((buffer-text (buffer-string)))
+            (should (string-match-p "^| Number | Square |" buffer-text))
+            (should (string-match-p "^| 1      |      1 |$" buffer-text))
+            (should-not (string-match-p "^| 1 | 1 |$" buffer-text))))))))
+
 (ert-deftest codex-ide-restore-thread-read-transcript-preserves-multiline-user-prompts ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (session nil)
@@ -2220,12 +2242,78 @@
   (with-temp-buffer
     (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
     (codex-ide--render-markdown-region (point-min) (point-max))
-    (let ((display (get-text-property (point-min) 'display)))
-      (should (stringp display))
-      (should (string-match-p "^| Name | Age |" display))
-      (should (string-match-p "^|------+-----|$" display))
-      (should (string-match-p "^| Bob  |   3 |$" display)))
-    (should (equal (get-text-property (1+ (point-min)) 'display) ""))))
+    (let ((rendered (buffer-string)))
+      (should (string-match-p "^| Name | Age |" rendered))
+      (should (string-match-p "^|------|----:|$" rendered))
+      (should (string-match-p "^| Bob  |   3 |$" rendered)))
+    (should-not (get-text-property (point-min) 'display))
+    (should (get-text-property (point-min) 'codex-ide-markdown-table-original))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-file-links-inside-pipe-tables ()
+  (with-temp-buffer
+    (insert "| File |\n| --- |\n| [`foo.el`](/tmp/foo.el#L3C2) |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (let ((rendered (buffer-string)))
+      (should (string-match-p "^| File   |" rendered))
+      (should (string-match-p "^| foo\\.el |" rendered))
+      (should-not (string-match-p (regexp-quote "[`foo.el`](/tmp/foo.el#L3C2)")
+                                  rendered)))
+    (goto-char (point-min))
+    (search-forward "foo.el")
+    (let ((pos (match-beginning 0)))
+      (should (button-at pos))
+      (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.el"))
+      (should (equal (get-text-property pos 'codex-ide-line) 3))
+      (should (equal (get-text-property pos 'codex-ide-column) 2)))))
+
+(ert-deftest codex-ide-render-markdown-region-defers-trailing-pipe-tables ()
+  (with-temp-buffer
+    (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (should (equal (buffer-string)
+                   "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n"))
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (should (string-match-p "^| Bob  |   3 |$" (buffer-string)))
+    (should-not (get-text-property (point-min) 'display))))
+
+(ert-deftest codex-ide-agent-message-completion-renders-trailing-pipe-tables ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/agentMessage/delta")
+             (params . ((itemId . "msg-1")
+                        (delta . "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p
+                     (regexp-quote "| Bob | 3 |")
+                     (buffer-string))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/completed")
+             (params . ((item . ((id . "msg-1")
+                                 (type . "agentMessage")
+                                 (status . "completed")))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((rendered (buffer-string)))
+              (should (string-match-p "^| Name | Age |" rendered))
+              (should (string-match-p "^| Bob  |   3 |$" rendered))
+              (should-not (text-property-any
+                           (point-min)
+                           (point-max)
+                           'display
+                           t))
+              (goto-char (point-min))
+              (search-forward "| Bob  |   3 |")
+              (should (get-text-property
+                       (match-beginning 0)
+                       'codex-ide-markdown-table-original)))))))))
 
 (ert-deftest codex-ide-render-file-change-diff-text-omits-detail-prefix ()
   (with-temp-buffer
