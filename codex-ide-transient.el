@@ -11,7 +11,6 @@
 
 (declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
-(declare-function codex-ide--refresh-all-session-header-lines "codex-ide-renderer" ())
 (declare-function codex-ide--available-model-names "codex-ide" ())
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
@@ -42,6 +41,9 @@
 (defconst codex-ide--other-model-choice "Other..."
   "Sentinel choice used to enter a custom model name.")
 
+(defconst codex-ide--empty-model-choice "<empty>"
+  "Sentinel choice used to clear the configured model.")
+
 (defun codex-ide--in-session-buffer-p ()
   "Return non-nil when the current buffer is a Codex session buffer."
   (derived-mode-p 'codex-ide-session-mode))
@@ -68,11 +70,17 @@
     (if models
         (let ((choice (completing-read
                        "Model (choose or use Other...; empty clears): "
-                       (append models (list codex-ide--other-model-choice))
+                       (append models
+                               (list codex-ide--empty-model-choice
+                                     codex-ide--other-model-choice))
                        nil nil nil nil default)))
-          (if (equal choice codex-ide--other-model-choice)
-              (read-string "Custom model (leave empty to clear): " default)
-            choice))
+          (cond
+           ((equal choice codex-ide--empty-model-choice)
+            "")
+           ((equal choice codex-ide--other-model-choice)
+            (read-string "Custom model (leave empty to clear): " default))
+           (t
+            choice)))
       (read-string "Model (leave empty to clear): " default))))
 
 (transient-define-suffix codex-ide--set-cli-path (path)
@@ -121,7 +129,6 @@
   :description "Set model"
   (interactive (list (codex-ide--read-model)))
   (setq codex-ide-model (unless (string-empty-p model) model))
-  (codex-ide--refresh-all-session-header-lines)
   (message "Codex model %s"
            (if codex-ide-model
                (format "set to %s" codex-ide-model)

@@ -870,6 +870,56 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
   (when-let ((effort (codex-ide--extract-reasoning-effort payload)))
     (codex-ide--session-metadata-put session :reasoning-effort effort)))
 
+(defun codex-ide--extract-model-name (payload)
+  "Extract a model string from PAYLOAD, if present."
+  (let* ((thread (and (listp payload) (alist-get 'thread payload)))
+         (turn (and (listp payload) (alist-get 'turn payload)))
+         (item (and (listp payload) (alist-get 'item payload)))
+         (result (and (listp payload) (alist-get 'result payload)))
+         (root (or (and (listp payload)
+                        (or (alist-get 'config payload)
+                            (alist-get 'effectiveConfig payload)))
+                   payload))
+         (settings (and (listp root)
+                        (or (codex-ide--alist-get-safe 'settings root)
+                            (codex-ide--alist-get-safe 'config root)))))
+    (seq-find
+     (lambda (value)
+       (and (stringp value)
+            (not (string-empty-p value))))
+     (list (and (listp payload) (alist-get 'model payload))
+           (and (listp payload) (alist-get 'modelName payload))
+           (and (listp thread) (alist-get 'model thread))
+           (and (listp thread) (alist-get 'modelName thread))
+           (and (listp turn) (alist-get 'model turn))
+           (and (listp turn) (alist-get 'modelName turn))
+           (and (listp item) (alist-get 'model item))
+           (and (listp item) (alist-get 'modelName item))
+           (and (listp result) (alist-get 'model result))
+           (and (listp result) (alist-get 'modelName result))
+           (and (listp root) (codex-ide--alist-get-safe 'model root))
+           (and (listp settings) (codex-ide--alist-get-safe 'model settings))))))
+
+(defun codex-ide--set-session-model-name (session model)
+  "Store MODEL as SESSION's effective model."
+  (codex-ide--session-metadata-put
+   session
+   :model-name
+   (and (stringp model)
+        (not (string-empty-p model))
+        model)))
+
+(defun codex-ide--clear-session-model-name (session)
+  "Clear SESSION's remembered model state."
+  (codex-ide--session-metadata-put session :model-name nil)
+  (codex-ide--session-metadata-put session :model-name-requested nil))
+
+(defun codex-ide--remember-model-name (session payload)
+  "Persist model information from PAYLOAD into SESSION metadata."
+  (when-let ((model (codex-ide--extract-model-name payload)))
+    (codex-ide--set-session-model-name session model)
+    t))
+
 (defun codex-ide--thread-read-turns (thread-read)
   "Return turn history from THREAD-READ."
   (or (alist-get 'turns thread-read)
@@ -1063,19 +1113,6 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
     (error "No Codex session available"))
   (codex-ide--request-sync session "config/read" '()))
 
-(defun codex-ide--extract-model-from-config (config)
-  "Extract a configured model string from CONFIG, or nil."
-  (let* ((root (or (alist-get 'config config)
-                   (alist-get 'effectiveConfig config)
-                   config))
-         (settings (or (codex-ide--alist-get-safe 'settings root)
-                       (codex-ide--alist-get-safe 'config root)))
-         (model (or (codex-ide--alist-get-safe 'model root)
-                    (codex-ide--alist-get-safe 'model settings))))
-    (when (and (stringp model)
-               (not (string-empty-p model)))
-      model)))
-
 (defun codex-ide--default-model-name (&optional session)
   "Return the server-recommended default model name using SESSION."
   (when-let* ((models (codex-ide--list-models session))
@@ -1091,17 +1128,17 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
          name)))
 
 (defun codex-ide--server-model-name (&optional session)
-  "Return the cached server-derived model name for SESSION, or nil."
+  "Return the cached session model name for SESSION, or nil."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (let ((cached (codex-ide--session-metadata-get session :server-model-name)))
+  (let ((cached (codex-ide--session-metadata-get session :model-name)))
     (unless (eq cached :unknown)
       cached)))
 
 (defun codex-ide--handle-server-model-name-resolved (session model)
   "Store MODEL for SESSION and refresh the header line."
-  (codex-ide--session-metadata-put session :server-model-name (or model :unknown))
+  (codex-ide--session-metadata-put session :model-name (or model :unknown))
   (when (buffer-live-p (codex-ide-session-buffer session))
     (codex-ide--update-header-line session)))
 
@@ -1131,12 +1168,12 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
   "Request SESSION's server-derived model name once, without blocking."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (when (and session
-             (not (codex-ide--session-metadata-get session :server-model-name))
-             (not (eq (codex-ide--session-metadata-get session :server-model-name)
+             (not (codex-ide--session-metadata-get session :model-name))
+             (not (eq (codex-ide--session-metadata-get session :model-name)
                       :unknown))
-             (not (codex-ide--session-metadata-get session :server-model-name-requested))
+             (not (codex-ide--session-metadata-get session :model-name-requested))
              (process-live-p (codex-ide-session-process session)))
-    (codex-ide--session-metadata-put session :server-model-name-requested t)
+    (codex-ide--session-metadata-put session :model-name-requested t)
     (codex-ide--request-async
      session
      "config/read"
@@ -1144,7 +1181,7 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
      (lambda (result error)
        (if error
            (codex-ide--request-default-model-name-async session)
-         (let ((model (codex-ide--extract-model-from-config result)))
+         (let ((model (codex-ide--extract-model-name result)))
            (if model
                (codex-ide--handle-server-model-name-resolved session model)
              (codex-ide--request-default-model-name-async session))))))))
@@ -1226,13 +1263,19 @@ ACTION is a short past-tense label used in log messages, such as
              (downcase action)
              (error-message-string err))
             nil))))
-    (codex-ide--remember-reasoning-effort
-     session
-     (codex-ide--request-sync
-      session
-      "thread/resume"
-      (with-current-buffer (codex-ide-session-buffer session)
-        (codex-ide--thread-resume-params thread-id))))
+    (codex-ide--clear-session-model-name session)
+    (unless codex-ide-model
+      (codex-ide--remember-model-name session thread-read))
+    (when codex-ide-model
+      (codex-ide--set-session-model-name session codex-ide-model))
+    (let ((result
+           (codex-ide--request-sync
+            session
+            "thread/resume"
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--thread-resume-params thread-id)))))
+      (codex-ide--remember-reasoning-effort session result)
+      (codex-ide--remember-model-name session result))
     (setf (codex-ide-session-thread-id session) thread-id)
     (codex-ide--session-metadata-put session :session-context-sent t)
     (codex-ide-log-message session "%s thread %s" action thread-id)
@@ -1506,12 +1549,16 @@ MODE can be nil or `new', `continue', or `resume'."
               (codex-ide--reset-session-buffer session))
             (pcase mode
               ('new
+               (codex-ide--clear-session-model-name session)
+               (when codex-ide-model
+                 (codex-ide--set-session-model-name session codex-ide-model))
                (let ((result (codex-ide--request-sync
                               session
                               "thread/start"
                               (with-current-buffer (codex-ide-session-buffer session)
                                 (codex-ide--thread-start-params)))))
                  (codex-ide--remember-reasoning-effort session result)
+                 (codex-ide--remember-model-name session result)
                  (setf (codex-ide-session-thread-id session)
                        (codex-ide--extract-thread-id result))
                  (codex-ide--session-metadata-put session :session-context-sent nil)
@@ -2032,6 +2079,7 @@ PARAMS describe the request."
     (pcase method
       ("thread/started"
        (codex-ide--remember-reasoning-effort session params)
+       (codex-ide--remember-model-name session params)
        (when-let ((thread-id (alist-get 'id (alist-get 'thread params))))
          (setf (codex-ide-session-thread-id session) thread-id))
        (codex-ide-log-message
@@ -2072,6 +2120,7 @@ PARAMS describe the request."
          (codex-ide--update-header-line session)))
       ("turn/started"
        (codex-ide--remember-reasoning-effort session params)
+       (codex-ide--remember-model-name session params)
        (setf (codex-ide-session-current-turn-id session)
              (or (alist-get 'id (alist-get 'turn params))
                  (alist-get 'turnId params))
@@ -2093,6 +2142,7 @@ PARAMS describe the request."
          (codex-ide--begin-turn-display session)))
       ("item/started"
        (when-let ((item (alist-get 'item params)))
+         (codex-ide--remember-model-name session item)
          (codex-ide-log-message
           session
           "Item started: %s (%s)"
@@ -2151,6 +2201,7 @@ PARAMS describe the request."
        (codex-ide--render-reasoning-delta session params))
       ("item/completed"
        (when-let ((item (alist-get 'item params)))
+         (codex-ide--remember-model-name session item)
          (codex-ide-log-message
           session
           "Item completed: %s (%s, status=%s)"

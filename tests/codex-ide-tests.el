@@ -824,15 +824,29 @@
                                     (substring-no-properties header-line-format)))))))))
 
 (ert-deftest codex-ide-header-line-shows-model-name ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "model:gpt-5\\.4"
+                                    (substring-no-properties header-line-format)))))))))
+
+(ert-deftest codex-ide-header-line-prefers-session-model-over-global-default ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-model "gpt-5.4"))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4-mini")
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--update-header-line session)
-            (should (string-match-p "model:gpt-5\\.4"
-                                    (substring-no-properties header-line-format)))))))))
+            (should (string-match-p "model:gpt-5\\.4-mini"
+                                    (substring-no-properties header-line-format)))
+            (should-not (string-match-p "model:gpt-5\\.4\\([^.-]\\|$\\)"
+                                        (substring-no-properties header-line-format)))))))))
 
 (ert-deftest codex-ide-header-line-uses-server-model-when-local-model-is-unset ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -894,6 +908,21 @@
             (should (equal requests '("config/read")))
             (codex-ide--ensure-server-model-name session)
             (should (equal requests '("config/read")))))))))
+
+(ert-deftest codex-ide-item-completed-remembers-session-model-name ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/completed")
+             (params . ((item . ((id . "item-1")
+                                 (type . "agentMessage")
+                                 (model . "gpt-5.4-mini")
+                                 (status . "completed")))))))
+          (should (equal (codex-ide--server-model-name session)
+                         "gpt-5.4-mini")))))))
 
 (ert-deftest codex-ide-server-model-name-falls-back-to-default-model-list-entry ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -961,6 +990,7 @@
                (process (codex-ide-session-process session)))
           (setf (codex-ide-session-current-turn-id session) "turn-approval-1"
                 (codex-ide-session-status session) "running")
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (_time _repeat function)
                        (funcall function)))

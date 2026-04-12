@@ -30,10 +30,8 @@
 (declare-function codex-ide-log-message "codex-ide" (session format-string &rest args))
 
 (defvar codex-ide-log-max-lines)
-(defvar codex-ide-model)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
-(defvar codex-ide--sessions)
 ;; Cached to avoid repeated feature loading during streamed rendering.
 (defvar codex-ide--markdown-display-mode-function-cache 'unset)
 
@@ -355,14 +353,9 @@ inserted text."
 
 (defun codex-ide--format-model-summary (&optional session)
   "Return a compact header summary for SESSION's model."
-  (let ((model (or (and (stringp codex-ide-model)
-                        (not (string-empty-p codex-ide-model))
-                        codex-ide-model)
-                   (and session
-                        (codex-ide--server-model-name session)))))
-    (unless (or model
-                (and (stringp codex-ide-model)
-                     (not (string-empty-p codex-ide-model))))
+  (let ((model (and session
+                    (codex-ide--server-model-name session))))
+    (unless model
       (codex-ide--ensure-server-model-name session))
     (when model
       (format "model:%s" model))))
@@ -412,12 +405,6 @@ inserted text."
                 "  ")
                'face 'codex-ide-header-line-face)))
       (codex-ide--update-mode-line session))))
-
-(defun codex-ide--refresh-all-session-header-lines ()
-  "Refresh header lines for all live Codex session buffers."
-  (dolist (session codex-ide--sessions)
-    (when (buffer-live-p (codex-ide-session-buffer session))
-      (codex-ide--update-header-line session))))
 
 (defun codex-ide--parse-file-link-target (target)
   "Parse markdown file TARGET into (PATH LINE COLUMN), or nil."
