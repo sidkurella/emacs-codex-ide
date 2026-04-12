@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'org-table)
 (require 'subr-x)
 (require 'codex-ide-core)
 
@@ -604,6 +605,111 @@ mode again."
              codex-ide-markdown t))
           (goto-char closing-end))))))
 
+(defun codex-ide--markdown-table-row-line-p (line)
+  "Return non-nil when LINE looks like a markdown pipe table row."
+  (string-match-p "\\`[ \t]*|.*|[ \t]*\\'" line))
+
+(defun codex-ide--markdown-table-separator-line-p (line)
+  "Return non-nil when LINE looks like a markdown table separator row."
+  (string-match-p
+   "\\`[ \t]*|[ \t]*:?-+:?[ \t]*\\(?:|[ \t]*:?-+:?[ \t]*\\)+|[ \t]*\\'"
+   line))
+
+(defun codex-ide--markdown-table-parse-row (line)
+  "Split markdown pipe table LINE into trimmed cell strings."
+  (mapcar #'string-trim
+          (split-string
+           (string-trim (string-remove-prefix "|"
+                                              (string-remove-suffix "|"
+                                                                    (string-trim-right line))))
+           "|")))
+
+(defun codex-ide--markdown-line-region-end (&optional limit)
+  "Return the current line end position, including a trailing newline when present.
+When LIMIT is non-nil, do not move beyond it."
+  (let* ((line-end (line-end-position))
+         (newline-end (if (< line-end (point-max))
+                          (1+ line-end)
+                        line-end)))
+    (min (or limit newline-end) newline-end)))
+
+(defun codex-ide--markdown-table-display-string (lines)
+  "Return an Org-aligned display string for markdown table LINES, or nil."
+  (when (>= (length lines) 2)
+    (let* ((header (car lines))
+           (separator (cadr lines))
+           (body (cddr lines)))
+      (when (and (codex-ide--markdown-table-row-line-p header)
+                 (codex-ide--markdown-table-separator-line-p separator))
+        (with-temp-buffer
+          (org-mode)
+          (insert
+           (format "| %s |\n"
+                   (string-join (codex-ide--markdown-table-parse-row header) " | ")))
+          (insert "|-\n")
+          (dolist (line body)
+            (when (codex-ide--markdown-table-row-line-p line)
+              (insert
+               (format "| %s |\n"
+                       (string-join (codex-ide--markdown-table-parse-row line) " | ")))))
+          (goto-char (point-min))
+          (org-table-align)
+          (propertize (buffer-string) 'face 'fixed-pitch))))))
+
+(defun codex-ide--markdown-table-block-at-point (end)
+  "Return markdown table data at point as (START END LINES), or nil.
+END bounds the scan region."
+  (let* ((header-start (line-beginning-position))
+         (header-end (line-end-position))
+         (header (buffer-substring-no-properties header-start header-end)))
+    (when (and (not (get-text-property header-start 'codex-ide-markdown))
+               (codex-ide--markdown-table-row-line-p header))
+      (save-excursion
+        (forward-line 1)
+        (when (< (point) end)
+          (let* ((separator-start (line-beginning-position))
+                 (separator-end (line-end-position))
+                 (separator (buffer-substring-no-properties separator-start separator-end)))
+            (when (and (not (get-text-property separator-start 'codex-ide-markdown))
+                       (codex-ide--markdown-table-separator-line-p separator))
+              (let ((lines (list header separator))
+                    (block-end (save-excursion
+                                 (goto-char separator-start)
+                                 (codex-ide--markdown-line-region-end end))))
+                (forward-line 1)
+                (while (and (< (point) end)
+                            (let* ((row-start (line-beginning-position))
+                                   (row-end (line-end-position))
+                                   (row (buffer-substring-no-properties row-start row-end)))
+                              (and (not (get-text-property row-start 'codex-ide-markdown))
+                                   (codex-ide--markdown-table-row-line-p row))))
+                  (let* ((row-start (line-beginning-position))
+                         (row-end (line-end-position))
+                         (row (buffer-substring-no-properties row-start row-end)))
+                    (setq lines (append lines (list row))
+                          block-end (codex-ide--markdown-line-region-end end)))
+                  (forward-line 1))
+                (list header-start block-end lines)))))))))
+
+(defun codex-ide--render-markdown-tables (start end)
+  "Render markdown pipe tables between START and END."
+  (goto-char start)
+  (while (< (point) end)
+    (if-let ((table (codex-ide--markdown-table-block-at-point end)))
+        (pcase-let ((`(,block-start ,block-end ,lines) table))
+          (when-let ((display (codex-ide--markdown-table-display-string lines)))
+            (add-text-properties
+             block-start (min (1+ block-start) block-end)
+             `(display ,display
+                       codex-ide-markdown t))
+            (when (< (1+ block-start) block-end)
+              (add-text-properties
+               (1+ block-start) block-end
+               '(display ""
+                 codex-ide-markdown t))))
+          (goto-char block-end))
+      (forward-line 1))))
+
 (defun codex-ide--render-markdown-region (start end)
   "Apply lightweight markdown rendering between START and END."
   (save-excursion
@@ -611,6 +717,8 @@ mode again."
       (codex-ide--clear-markdown-properties start end)
       (goto-char start)
       (codex-ide--render-fenced-code-blocks start end)
+      (goto-char start)
+      (codex-ide--render-markdown-tables start end)
       (goto-char start)
       (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)" end t)
         (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)

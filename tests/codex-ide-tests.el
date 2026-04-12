@@ -2216,6 +2216,17 @@
     (forward-line -1)
     (should (equal (get-text-property (point) 'display) ""))))
 
+(ert-deftest codex-ide-render-markdown-region-renders-pipe-tables ()
+  (with-temp-buffer
+    (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (let ((display (get-text-property (point-min) 'display)))
+      (should (stringp display))
+      (should (string-match-p "^| Name | Age |" display))
+      (should (string-match-p "^|------+-----|$" display))
+      (should (string-match-p "^| Bob  |   3 |$" display)))
+    (should (equal (get-text-property (1+ (point-min)) 'display) ""))))
+
 (ert-deftest codex-ide-render-file-change-diff-text-omits-detail-prefix ()
   (with-temp-buffer
     (codex-ide--render-file-change-diff-text
