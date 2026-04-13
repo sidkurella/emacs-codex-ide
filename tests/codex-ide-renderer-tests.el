@@ -28,7 +28,7 @@
 (ert-deftest codex-ide-renderer-renders-javascript-fenced-code-blocks ()
   (with-temp-buffer
     (insert "```javascript\nconst x = 1;\n```\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
     (goto-char (point-min))
     (should (equal (get-text-property (point-min) 'display) ""))
     (search-forward "const x")
@@ -41,6 +41,26 @@
     (goto-char (point-max))
     (forward-line -1)
     (should (equal (get-text-property (point) 'display) ""))))
+
+(ert-deftest codex-ide-renderer-fontifies-completed-fences-while-streaming ()
+  (with-temp-buffer
+    (insert "```javascript\nconst x = 1;\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (goto-char (point-min))
+    (search-forward "const x")
+    (let ((code-pos (match-beginning 0)))
+      (should-not (memq 'font-lock-keyword-face
+                        (ensure-list (get-text-property code-pos 'face)))))
+    (goto-char (point-max))
+    (insert "```\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (goto-char (point-min))
+    (search-forward "const x")
+    (let ((code-pos (match-beginning 0)))
+      (should (memq 'fixed-pitch
+                    (ensure-list (get-text-property code-pos 'face))))
+      (should (memq 'font-lock-keyword-face
+                    (ensure-list (get-text-property code-pos 'face)))))))
 
 (ert-deftest codex-ide-renderer-renders-indented-pipe-tables ()
   (with-temp-buffer

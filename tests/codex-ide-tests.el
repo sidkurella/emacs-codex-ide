@@ -2934,8 +2934,8 @@
                              '((("\\_<foo\\_>" . font-lock-keyword-face)))))))
       (with-temp-buffer
         (insert "```codex-ide-test-cached\nfoo\n```\n")
-        (codex-ide--render-markdown-region (point-min) (point-max))
-        (codex-ide--render-markdown-region (point-min) (point-max))
+        (codex-ide--render-markdown-region (point-min) (point-max) t)
+        (codex-ide--render-markdown-region (point-min) (point-max) t)
         (should (= mode-call-count 1))
         (goto-char (point-min))
         (search-forward "foo")

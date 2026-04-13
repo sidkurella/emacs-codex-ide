@@ -450,9 +450,14 @@ inserted text."
       (goto-char start)
       (while (< (point) (marker-position end-marker))
         (let* ((pos (point))
-               (next (or (next-single-property-change
-                          pos 'codex-ide-markdown nil (marker-position end-marker))
-                         (marker-position end-marker))))
+               (next (min
+                      (or (next-single-property-change
+                           pos 'codex-ide-markdown nil (marker-position end-marker))
+                          (marker-position end-marker))
+                      (or (next-single-property-change
+                           pos 'codex-ide-markdown-code-fontified nil
+                           (marker-position end-marker))
+                          (marker-position end-marker)))))
           (cond
            ((and (get-text-property pos 'codex-ide-markdown)
                  (get-text-property pos 'codex-ide-markdown-table-original))
@@ -462,6 +467,26 @@ inserted text."
               (delete-region pos next)
               (goto-char pos)
               (insert original)))
+           ((and (get-text-property pos 'codex-ide-markdown)
+                 (get-text-property pos 'codex-ide-markdown-code-fontified))
+            (remove-text-properties
+             pos next
+             '(mouse-face nil
+               help-echo nil
+               keymap nil
+               category nil
+               button nil
+               action nil
+               follow-link nil
+               display nil
+               codex-ide-path nil
+               codex-ide-line nil
+               codex-ide-column nil
+               codex-ide-table-link nil
+               codex-ide-markdown-table-original nil
+               codex-ide-markdown-code-content nil
+               codex-ide-markdown nil))
+            (goto-char next))
            ((get-text-property pos 'codex-ide-markdown)
             (remove-text-properties
              pos next
@@ -480,6 +505,8 @@ inserted text."
                codex-ide-column nil
                codex-ide-table-link nil
                codex-ide-markdown-table-original nil
+               codex-ide-markdown-code-content nil
+               codex-ide-markdown-code-fontified nil
                codex-ide-markdown nil))
             (goto-char next))
            (t
@@ -633,7 +660,8 @@ mode again."
             (font-lock-ensure (point-min) (point-max))
             (codex-ide--copy-code-font-lock-properties
              source-buffer start end))
-          (error nil))))))
+          (error nil))
+        t))))
 
 (defun codex-ide--render-fenced-code-blocks (start end)
   "Render fenced code blocks between START and END."
@@ -655,9 +683,17 @@ mode again."
              codex-ide-markdown t))
           (add-text-properties
            code-start closing-start
-           '(codex-ide-markdown t))
+           '(codex-ide-markdown t
+             codex-ide-markdown-code-content t))
           (add-face-text-property code-start closing-start 'fixed-pitch 'append)
-          (codex-ide--fontify-code-block-region code-start closing-start language)
+          (when (and (< code-start closing-start)
+                     (not (get-text-property
+                           code-start
+                           'codex-ide-markdown-code-fontified)))
+            (codex-ide--fontify-code-block-region code-start closing-start language)
+            (add-text-properties
+             code-start closing-start
+             '(codex-ide-markdown-code-fontified t)))
           (add-text-properties
            closing-start closing-end
            '(display ""
@@ -1038,7 +1074,9 @@ END; this keeps streamed partial tables from being reformatted on every delta."
           (end-marker (copy-marker end)))
       (codex-ide--clear-markdown-properties start (marker-position end-marker))
       (goto-char start)
-      (codex-ide--render-fenced-code-blocks start (marker-position end-marker))
+      (codex-ide--render-fenced-code-blocks
+       start
+       (marker-position end-marker))
       (goto-char start)
       (codex-ide--render-markdown-tables
        start
