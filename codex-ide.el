@@ -237,9 +237,24 @@ top of the buffer."
       (unless (eq inside codex-ide-session-prompt-minor-mode)
         (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))
 
+(defun codex-ide--disable-session-font-lock ()
+  "Disable buffer font-lock machinery for Codex transcript buffers."
+  (setq-local font-lock-defaults nil)
+  (setq-local font-lock-keywords nil)
+  (setq-local font-lock-function #'ignore)
+  (setq-local jit-lock-functions nil)
+  (when (boundp 'font-lock-extra-managed-props)
+    (setq-local font-lock-extra-managed-props nil))
+  (when (fboundp 'jit-lock-mode)
+    (jit-lock-mode -1))
+  (when (fboundp 'font-lock-mode)
+    (font-lock-mode -1))
+  (setq-local jit-lock-functions nil))
+
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
+  (codex-ide--disable-session-font-lock)
   (setq-local truncate-lines nil)
   (when codex-ide-session-enable-visual-line-mode
     (visual-line-mode 1))
