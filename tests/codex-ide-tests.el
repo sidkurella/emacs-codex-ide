@@ -330,6 +330,31 @@
       (codex-ide-session-mode)
       (should-not visual-line-mode))))
 
+(ert-deftest codex-ide-session-mode-disables-font-lock-jit-lock ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (should (eq font-lock-function #'ignore))
+    (should-not font-lock-defaults)
+    (should-not font-lock-keywords)
+    (should-not font-lock-mode)
+    (should-not jit-lock-functions)
+    (font-lock-mode 1)
+    (should-not font-lock-mode)
+    (should-not jit-lock-functions)))
+
+(ert-deftest codex-ide-session-markdown-faces-survive-font-lock-attempts ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((inhibit-read-only t))
+      (insert "`code`")
+      (codex-ide--render-markdown-region (point-min) (point-max))
+      (font-lock-mode 1)
+      (font-lock-ensure (point-min) (point-max))
+      (goto-char (point-min))
+      (search-forward "code")
+      (should (eq (get-text-property (1- (point)) 'face)
+                  'font-lock-keyword-face)))))
+
 (ert-deftest codex-ide-session-mode-binds-tab-to-button-navigation ()
   (with-temp-buffer
     (codex-ide-session-mode)
