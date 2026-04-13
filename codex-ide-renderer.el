@@ -582,45 +582,68 @@ mode again."
       (when localp
         (set (make-local-variable variable) (copy-tree value))))))
 
+(defun codex-ide--copy-code-font-lock-properties (source-buffer start end)
+  "Copy font-lock properties from current buffer to SOURCE-BUFFER START END."
+  (let ((pos (point-min)))
+    (while (< pos (point-max))
+      (let* ((next (next-property-change pos (current-buffer) (point-max)))
+             (face (get-text-property pos 'face))
+             (font-lock-face (get-text-property pos 'font-lock-face))
+             (props (append
+                     (when face (list 'face face))
+                     (when font-lock-face
+                       (list 'font-lock-face font-lock-face))))
+             (target-start (+ start (1- pos)))
+             (target-end (min end (+ start (1- next)))))
+        (when props
+          (with-current-buffer source-buffer
+            (add-face-text-property
+             target-start
+             target-end
+             (or face font-lock-face)
+             'append)))
+        (setq pos next)))))
+
 (defun codex-ide--fontify-code-block-region (start end language)
   "Apply syntax highlighting to region START END using LANGUAGE."
   (when-let ((mode (codex-ide--markdown-language-mode language)))
-    (let ((spec (codex-ide--font-lock-spec-for-mode mode))
-          (source-buffer (current-buffer))
+    (let ((source-buffer (current-buffer))
           (code (buffer-substring-no-properties start end)))
-      (with-temp-buffer
-        (insert code)
-        (codex-ide--apply-font-lock-spec spec)
-        (font-lock-mode 1)
-        (font-lock-ensure (point-min) (point-max))
-        (let ((pos (point-min)))
-          (while (< pos (point-max))
-            (let* ((next (next-property-change pos (current-buffer) (point-max)))
-                   (face (get-text-property pos 'face))
-                   (font-lock-face (get-text-property pos 'font-lock-face))
-                   (props (append
-                           (when face (list 'face face))
-                           (when font-lock-face
-                             (list 'font-lock-face font-lock-face))))
-                   (target-start (+ start (1- pos)))
-                   (target-end (min end (+ start (1- next)))))
-              (when props
-                (with-current-buffer source-buffer
-                  (add-text-properties
-                   target-start
-                   target-end
-                   props)))
-              (setq pos next))))))))
+      (unless
+          (condition-case nil
+              (let ((spec (codex-ide--font-lock-spec-for-mode mode)))
+                (with-temp-buffer
+                  (insert code)
+                  (codex-ide--apply-font-lock-spec spec)
+                  (font-lock-mode 1)
+                  (font-lock-ensure (point-min) (point-max))
+                  (codex-ide--copy-code-font-lock-properties
+                   source-buffer start end))
+                t)
+            (error nil))
+        (condition-case nil
+          (with-temp-buffer
+            (insert code)
+            (let ((buffer-file-name
+                   (format "codex-ide-snippet.%s"
+                           (downcase (string-trim (or language ""))))))
+              (delay-mode-hooks
+                (funcall mode)))
+            (font-lock-mode 1)
+            (font-lock-ensure (point-min) (point-max))
+            (codex-ide--copy-code-font-lock-properties
+             source-buffer start end))
+          (error nil))))))
 
 (defun codex-ide--render-fenced-code-blocks (start end)
   "Render fenced code blocks between START and END."
   (goto-char start)
-  (while (re-search-forward "^```\\([^`\n]*\\)[ \t]*$" end t)
+  (while (re-search-forward "^[ \t]*```\\([^`\n]*\\)[ \t]*$" end t)
     (let* ((fence-start (match-beginning 0))
            (language (string-trim (or (match-string-no-properties 1) "")))
            (code-start (min (1+ (match-end 0)) end)))
       (when (and (< code-start end)
-                 (re-search-forward "^```[ \t]*$" end t))
+                 (re-search-forward "^[ \t]*```[ \t]*$" end t))
         (let* ((closing-start (match-beginning 0))
                (closing-end (min (if (eq (char-after (match-end 0)) ?\n)
                                      (1+ (match-end 0))
@@ -633,6 +656,7 @@ mode again."
           (add-text-properties
            code-start closing-start
            '(codex-ide-markdown t))
+          (add-face-text-property code-start closing-start 'fixed-pitch 'append)
           (codex-ide--fontify-code-block-region code-start closing-start language)
           (add-text-properties
            closing-start closing-end
@@ -652,12 +676,12 @@ mode again."
 
 (defun codex-ide--markdown-table-parse-row (line)
   "Split markdown pipe table LINE into trimmed cell strings."
-  (mapcar #'string-trim
-          (split-string
-           (string-trim (string-remove-prefix "|"
-                                              (string-remove-suffix "|"
-                                                                    (string-trim-right line))))
-           "|")))
+  (let ((trimmed (string-trim line)))
+    (mapcar #'string-trim
+            (split-string
+             (string-remove-prefix "|"
+                                   (string-remove-suffix "|" trimmed))
+             "|"))))
 
 (defun codex-ide--markdown-line-region-end (&optional limit)
   "Return the current line end position, including a trailing newline when present.
@@ -842,6 +866,24 @@ When UNDERSCORE is non-nil, reject intraword underscore delimiters."
     "|")
    "|\n"))
 
+(defun codex-ide--markdown-table-leading-indentation (line)
+  "Return indentation before the opening table pipe in LINE."
+  (if (string-match "\\`\\([ \t]*\\)|" line)
+      (match-string 1 line)
+    ""))
+
+(defun codex-ide--markdown-prefix-lines (text prefix)
+  "Return TEXT with PREFIX added to each non-empty line."
+  (if (string-empty-p prefix)
+      text
+    (mapconcat
+     (lambda (line)
+       (if (string-empty-p line)
+           line
+         (concat prefix line)))
+     (split-string text "\n")
+     "\n")))
+
 (defun codex-ide--markdown-table-display-string (lines)
   "Return a rendered display string for markdown table LINES, or nil."
   (when (>= (length lines) 2)
@@ -850,7 +892,8 @@ When UNDERSCORE is non-nil, reject intraword underscore delimiters."
            (body (cddr lines)))
       (when (and (codex-ide--markdown-table-row-line-p header)
                  (codex-ide--markdown-table-separator-line-p separator))
-        (let* ((alignments (codex-ide--markdown-table-column-alignments separator))
+        (let* ((indent (codex-ide--markdown-table-leading-indentation header))
+               (alignments (codex-ide--markdown-table-column-alignments separator))
                (raw-rows (mapcar #'codex-ide--markdown-table-parse-row
                                  (cons header
                                        (seq-filter #'codex-ide--markdown-table-row-line-p
@@ -889,7 +932,8 @@ When UNDERSCORE is non-nil, reject intraword underscore delimiters."
                      widths
                      normalized-alignments))
                   (cdr rendered-rows)
-                  ""))))
+                  "")))
+               (table-text (codex-ide--markdown-prefix-lines table-text indent)))
           (add-face-text-property
            0 (length table-text) 'fixed-pitch 'append table-text)
           table-text)))))
