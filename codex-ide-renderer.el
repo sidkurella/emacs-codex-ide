@@ -35,6 +35,26 @@
 ;; Cached to avoid repeated feature loading during streamed rendering.
 (defvar codex-ide--markdown-display-mode-function-cache 'unset)
 
+(defcustom codex-ide-render-markdown-during-streaming t
+  "Whether to apply incremental markdown rendering while text streams.
+
+When non-nil, codex-ide renders completed safe spans of assistant text as they
+arrive.  It does not repeatedly re-render the full assistant message; unfinished
+lines, pipe tables, and open fenced code blocks are left for a later streaming
+pass or the final completion render."
+  :type 'boolean
+  :group 'codex-ide)
+
+(defcustom codex-ide-markdown-render-max-chars 30000
+  "Maximum markdown span size to render with rich markdown.
+
+When a single render span is larger than this many characters, codex-ide leaves
+that span as plain text.  Set this to nil for no size limit, or 0 to disable
+rich markdown rendering."
+  :type '(choice (const :tag "No limit" nil)
+                 (integer :tag "Maximum characters"))
+  :group 'codex-ide)
+
 (defface codex-ide-user-prompt-face
   '((((class color) (background light))
      :background "#f4f1e8")
@@ -444,7 +464,7 @@ inserted text."
 
 (defun codex-ide--clear-markdown-properties (start end)
   "Clear Codex markdown rendering properties between START and END."
-  (let ((end-marker (copy-marker end)))
+  (let ((end-marker (copy-marker end t)))
     ;; Only remove properties from regions previously marked as markdown.
     ;; Clearing `face' across the whole agent-message span can wipe faces from
     ;; later non-markdown transcript entries like "* Ran ..." summaries.
@@ -1063,7 +1083,7 @@ the table so streaming partial tables at point-max are not rendered yet."
 (defun codex-ide--render-markdown-tables (start end &optional allow-trailing)
   "Render markdown pipe tables between START and END.
 When ALLOW-TRAILING is nil, leave an unfinished trailing table unrendered."
-  (let ((end-marker (copy-marker end)))
+  (let ((end-marker (copy-marker end t)))
     (goto-char start)
     (while (< (point) (marker-position end-marker))
       (if-let ((table (codex-ide--markdown-table-block-at-point
@@ -1095,7 +1115,7 @@ END; this keeps streamed partial tables from being reformatted on every delta."
   (codex-ide--without-undo-recording
     (save-excursion
       (let ((inhibit-read-only t)
-            (end-marker (copy-marker end)))
+            (end-marker (copy-marker end t)))
         (codex-ide--clear-markdown-properties start (marker-position end-marker))
         (goto-char start)
         (codex-ide--render-fenced-code-blocks
@@ -1177,6 +1197,202 @@ END; this keeps streamed partial tables from being reformatted on every delta."
          'italic
          t)
         (set-marker end-marker nil)))))
+
+(defun codex-ide--markdown-region-over-size-limit-p (start end)
+  "Return non-nil when START to END should stay plain for performance."
+  (and (integerp codex-ide-markdown-render-max-chars)
+       (or (<= codex-ide-markdown-render-max-chars 0)
+           (> (- end start) codex-ide-markdown-render-max-chars))))
+
+(defun codex-ide--maybe-render-markdown-region
+    (start end &optional allow-trailing-tables)
+  "Render markdown between START and END unless the region is too large.
+Return non-nil when rendering was applied.  When rendering is skipped, remove
+any existing Codex markdown properties from the region so the buffer remains
+plain text."
+  (if (codex-ide--markdown-region-over-size-limit-p start end)
+      (progn
+        (codex-ide--without-undo-recording
+          (save-excursion
+            (let ((inhibit-read-only t))
+              (codex-ide--clear-markdown-properties start end))))
+        nil)
+    (codex-ide--render-markdown-region start end allow-trailing-tables)
+    t))
+
+(defun codex-ide--streaming-markdown-complete-line-limit (end)
+  "Return the completed-line boundary at or before END."
+  (save-excursion
+    (goto-char end)
+    (if (or (bobp) (bolp))
+        (point)
+      (line-beginning-position))))
+
+(defun codex-ide--markdown-fence-line-p (line)
+  "Return non-nil when LINE is a fenced-code delimiter."
+  (string-match-p "\\`[ \t]*```[^`\n]*[ \t]*\\'" line))
+
+(defun codex-ide--streaming-markdown-table-block-end (limit)
+  "Return the raw markdown table block end at point, or nil.
+LIMIT bounds the scan."
+  (let* ((header-start (point))
+         (header (buffer-substring-no-properties
+                  header-start
+                  (line-end-position))))
+    (when (codex-ide--markdown-table-row-line-p header)
+      (save-excursion
+        (forward-line 1)
+        (when (< (point) limit)
+          (let ((separator (buffer-substring-no-properties
+                            (point)
+                            (line-end-position))))
+            (when (codex-ide--markdown-table-separator-line-p separator)
+              (forward-line 1)
+              (while (and (< (point) limit)
+                          (codex-ide--markdown-table-row-line-p
+                           (buffer-substring-no-properties
+                            (point)
+                            (line-end-position))))
+                (forward-line 1))
+              (min (point) limit))))))))
+
+(defun codex-ide--streaming-markdown-pending-table-header-p (line limit)
+  "Return non-nil when LINE may be a table header awaiting more input.
+LIMIT is the completed-line boundary for the current streaming pass."
+  (and (codex-ide--markdown-table-row-line-p line)
+       (save-excursion
+         (forward-line 1)
+         (or (>= (point) limit)
+             (codex-ide--markdown-table-separator-line-p
+              (buffer-substring-no-properties
+               (point)
+               (line-end-position)))))))
+
+(defun codex-ide--streaming-markdown-segments (start limit)
+  "Return stream-safe markdown segments from START to LIMIT.
+The return value is (SEGMENTS NEXT), where SEGMENTS is a list of
+\(START END ALLOW-TRAILING-TABLES) marker tuples and NEXT is a marker for the
+next dirty position.  A trailing pipe table is rendered but kept dirty because
+new rows may still arrive.  Open fenced code blocks stop the scan so the whole
+block can be rendered once its closing fence arrives."
+  (let ((segments nil)
+        (segment-start start)
+        (next-position limit)
+        (stop nil))
+    (save-excursion
+      (goto-char start)
+      (while (and (< (point) limit)
+                  (not stop))
+        (let* ((line-start (point))
+               (line (buffer-substring-no-properties
+                      line-start
+                      (line-end-position))))
+          (cond
+           ((codex-ide--markdown-fence-line-p line)
+            (when (< segment-start line-start)
+              (push (list (copy-marker segment-start)
+                          (copy-marker line-start)
+                          nil)
+                    segments))
+            (let ((closing-end nil))
+              (save-excursion
+                (forward-line 1)
+                (when (re-search-forward
+                       "^[ \t]*```[ \t]*$"
+                       limit
+                       t)
+                  (setq closing-end
+                        (codex-ide--markdown-line-region-end limit))))
+              (if closing-end
+                  (progn
+                    (push (list (copy-marker line-start)
+                                (copy-marker closing-end)
+                                nil)
+                          segments)
+                    (goto-char closing-end)
+                    (setq segment-start closing-end))
+                (setq next-position line-start
+                      stop t))))
+           ((let ((table-end
+                   (codex-ide--streaming-markdown-table-block-end limit)))
+              (when table-end
+                (if (= table-end limit)
+                    (progn
+                      (when (< segment-start line-start)
+                        (push (list (copy-marker segment-start)
+                                    (copy-marker line-start)
+                                    nil)
+                              segments))
+                      (push (list (copy-marker line-start)
+                                  (copy-marker table-end)
+                                  t)
+                            segments)
+                      (setq next-position line-start
+                            stop t))
+                  (goto-char table-end))
+                t)))
+           ((codex-ide--streaming-markdown-pending-table-header-p line limit)
+            (when (< segment-start line-start)
+              (push (list (copy-marker segment-start)
+                          (copy-marker line-start)
+                          nil)
+                    segments))
+            (setq next-position line-start
+                  stop t))
+           (t
+            (forward-line 1))))))
+    (unless stop
+      (setq next-position limit)
+      (when (< segment-start limit)
+        (push (list (copy-marker segment-start)
+                    (copy-marker limit)
+                    nil)
+              segments)))
+    (list (nreverse segments) (copy-marker next-position))))
+
+(defun codex-ide--render-current-agent-message-markdown-streaming
+    (&optional session item-id)
+  "Incrementally render stream-safe markdown for SESSION's current message."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((buffer (and session (codex-ide-session-buffer session))))
+    (when (and (buffer-live-p buffer)
+               (or (null item-id)
+                   (equal item-id
+                          (codex-ide-session-current-message-item-id session))))
+      (when-let ((message-start
+                  (codex-ide-session-current-message-start-marker session)))
+        (when (eq (marker-buffer message-start) buffer)
+          (with-current-buffer buffer
+            (let* ((render-start-marker
+                    (or (codex-ide--session-metadata-get
+                         session
+                         :agent-message-stream-render-start-marker)
+                        (codex-ide--session-metadata-put
+                         session
+                         :agent-message-stream-render-start-marker
+                         (copy-marker message-start))))
+                   (render-start (marker-position render-start-marker))
+                   (limit (codex-ide--streaming-markdown-complete-line-limit
+                           (point-max))))
+              (when (< render-start limit)
+                (pcase-let ((`(,segments ,next-marker)
+                             (codex-ide--streaming-markdown-segments
+                              render-start
+                              limit)))
+                  (dolist (segment segments)
+                    (let ((segment-start (marker-position (nth 0 segment)))
+                          (segment-end (marker-position (nth 1 segment)))
+                          (allow-trailing-tables (nth 2 segment)))
+                      (when (< segment-start segment-end)
+                        (codex-ide--maybe-render-markdown-region
+                         segment-start
+                         segment-end
+                         allow-trailing-tables)))
+                    (set-marker (nth 0 segment) nil)
+                    (set-marker (nth 1 segment) nil))
+                  (set-marker render-start-marker
+                              (marker-position next-marker))
+                  (set-marker next-marker nil))))))))))
 
 (defun codex-ide--insert-input-prompt (&optional session initial-text)
   "Insert a writable `>' prompt for SESSION.
@@ -1644,14 +1860,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
     (let ((codex-ide--current-agent-item-type item-type))
       (pcase item-type
         ("agentMessage"
-         (when-let ((message-start (codex-ide-session-current-message-start-marker session)))
-           (when (and (equal item-id (codex-ide-session-current-message-item-id session))
-                      (eq (marker-buffer message-start) buffer))
-             (with-current-buffer buffer
-               (codex-ide--render-markdown-region
-                (marker-position message-start)
-                (point-max)
-                t)))))
+         (codex-ide--render-current-agent-message-markdown session item-id t))
         ("commandExecution"
          (cond
           ((equal status "failed")
@@ -1718,9 +1927,47 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (codex-ide--append-output-separator buffer)
       (codex-ide--append-agent-text buffer "\n")
       (setf (codex-ide-session-current-message-start-marker session)
-            (copy-marker (with-current-buffer buffer (point-max))))
+            (with-current-buffer buffer
+              (copy-marker (point-max))))
+      (codex-ide--session-metadata-put
+       session
+       :agent-message-stream-render-start-marker
+       (copy-marker (codex-ide-session-current-message-start-marker session)))
       (setf (codex-ide-session-current-message-item-id session) item-id
             (codex-ide-session-current-message-prefix-inserted session) t))))
+
+(defun codex-ide--render-current-agent-message-markdown
+    (&optional session item-id allow-trailing-tables)
+  "Render the current assistant message for SESSION.
+When ITEM-ID is non-nil, render only when it matches SESSION's current message."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((buffer (and session (codex-ide-session-buffer session))))
+    (when (and (buffer-live-p buffer)
+               (or (null item-id)
+                   (equal item-id
+                          (codex-ide-session-current-message-item-id session))))
+      (when-let ((message-start
+                  (codex-ide-session-current-message-start-marker session)))
+        (when (eq (marker-buffer message-start) buffer)
+          (with-current-buffer buffer
+            (let* ((stream-marker
+                    (codex-ide--session-metadata-get
+                     session
+                     :agent-message-stream-render-start-marker))
+                   (render-start
+                    (if (and (markerp stream-marker)
+                             (eq (marker-buffer stream-marker) buffer))
+                        (marker-position stream-marker)
+                      (marker-position message-start))))
+              (when (< render-start (point-max))
+                (codex-ide--maybe-render-markdown-region
+                 render-start
+                 (point-max)
+                 allow-trailing-tables))))
+          (codex-ide--session-metadata-put
+           session
+           :agent-message-stream-render-start-marker
+           nil))))))
 
 (defun codex-ide--render-session-error (session values &optional prefix face)
   "Render session error VALUES for SESSION with PREFIX using FACE."
@@ -1844,13 +2091,14 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
         (codex-ide--append-output-separator buffer)
         (codex-ide--append-agent-text buffer "\n")
         (setf (codex-ide-session-current-message-start-marker session)
-              (copy-marker (with-current-buffer buffer (point-max))))
+              (with-current-buffer buffer
+                (copy-marker (point-max))))
         (setf (codex-ide-session-current-message-item-id session) item-id
               (codex-ide-session-current-message-prefix-inserted session) t)
         (codex-ide--append-agent-text buffer text)
         (when-let ((start (codex-ide-session-current-message-start-marker session)))
           (with-current-buffer buffer
-            (codex-ide--render-markdown-region start (point-max) t))))
+            (codex-ide--maybe-render-markdown-region start (point-max) t))))
       t)))
 
 (defun codex-ide--replay-thread-read-turn (session turn)
