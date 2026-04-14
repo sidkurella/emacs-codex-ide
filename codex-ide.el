@@ -184,6 +184,15 @@ top of the buffer."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-log-stream-deltas nil
+  "Whether to log every streamed output delta.
+
+When nil, high-frequency text deltas are omitted from the log buffer.  Item
+start, completion, errors, and other lifecycle events are still logged."
+  :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-resume-summary-turn-limit 100
   "How many recent turns to summarize when resuming a stored thread."
   :type 'integer
@@ -2270,7 +2279,8 @@ PARAMS describe the request."
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
          (let ((codex-ide--current-agent-item-type "agentMessage"))
-           (unless (string-empty-p delta)
+           (when (and codex-ide-log-stream-deltas
+                      (not (string-empty-p delta)))
              (codex-ide-log-message
               session
               "Agent delta for item %s (%d chars)"
@@ -2278,24 +2288,27 @@ PARAMS describe the request."
               (length delta)))
            (codex-ide--ensure-agent-message-prefix session item-id)
            (codex-ide--append-agent-text buffer delta)
-           (when-let ((start (codex-ide-session-current-message-start-marker session)))
-             (with-current-buffer buffer
-               (codex-ide--render-markdown-region start (point-max) nil))))))
+           (when codex-ide-render-markdown-during-streaming
+             (codex-ide--render-current-agent-message-markdown-streaming
+              session
+              item-id)))))
       ("item/commandExecution/outputDelta"
        (let ((item-id (alist-get 'itemId params)))
-         (codex-ide-log-message
-          session
-          "Command output delta for item %s (%d chars)"
-          item-id
-          (length (or (alist-get 'delta params) "")))))
+         (when codex-ide-log-stream-deltas
+           (codex-ide-log-message
+            session
+            "Command output delta for item %s (%d chars)"
+            item-id
+            (length (or (alist-get 'delta params) ""))))))
       ("item/fileChange/outputDelta"
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
-         (codex-ide-log-message
-          session
-          "File-change delta for item %s (%d chars)"
-          item-id
-          (length delta))
+         (when codex-ide-log-stream-deltas
+           (codex-ide-log-message
+            session
+            "File-change delta for item %s (%d chars)"
+            item-id
+            (length delta)))
          (when-let ((state (codex-ide--item-state session item-id)))
            (codex-ide--put-item-state
             session
@@ -2303,18 +2316,20 @@ PARAMS describe the request."
             (plist-put state :diff-text
                        (concat (or (plist-get state :diff-text) "") delta))))))
       ("item/plan/delta"
-       (codex-ide-log-message
-        session
-        "Plan delta (%d chars)"
-        (length (or (alist-get 'delta params) "")))
+       (when codex-ide-log-stream-deltas
+         (codex-ide-log-message
+          session
+          "Plan delta (%d chars)"
+          (length (or (alist-get 'delta params) ""))))
        (codex-ide--render-plan-delta session params))
       ("item/reasoning/summaryTextDelta"
-       (codex-ide-log-message
-        session
-        "Reasoning summary delta (%d chars)"
-        (length (or (alist-get 'delta params)
-                    (alist-get 'text params)
-                    "")))
+       (when codex-ide-log-stream-deltas
+         (codex-ide-log-message
+          session
+          "Reasoning summary delta (%d chars)"
+          (length (or (alist-get 'delta params)
+                      (alist-get 'text params)
+                      ""))))
        (codex-ide--render-reasoning-delta session params))
       ("item/completed"
        (when-let ((item (alist-get 'item params)))
