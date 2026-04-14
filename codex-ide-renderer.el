@@ -843,6 +843,12 @@ When LIMIT is non-nil, do not move beyond it."
   "Return non-nil when START to END has no markdown-rendered text."
   (not (text-property-not-all start end 'codex-ide-markdown nil)))
 
+(defun codex-ide--markdown-emphasis-delimiters-unrendered-p
+    (span-start content-start content-end span-end)
+  "Return non-nil when emphasis delimiters have not already been rendered."
+  (and (codex-ide--markdown-region-unrendered-p span-start content-start)
+       (codex-ide--markdown-region-unrendered-p content-end span-end)))
+
 (defun codex-ide--markdown-emphasis-underscore-boundary-p (start end)
   "Return non-nil when underscores from START to END are markdown delimiters."
   (and (not (codex-ide--markdown-inline-word-char-p
@@ -860,14 +866,13 @@ When UNDERSCORE is non-nil, reject intraword underscore delimiters."
           (span-end (match-end 2))
           (content-start (match-beginning 3))
           (content-end (match-end 3)))
-      (when (and (codex-ide--markdown-region-unrendered-p span-start span-end)
+      (when (and (codex-ide--markdown-emphasis-delimiters-unrendered-p
+                  span-start content-start content-end span-end)
                  (or (not underscore)
                      (codex-ide--markdown-emphasis-underscore-boundary-p
                       span-start span-end)))
         (let ((content-length (- content-end content-start)))
-          (add-text-properties
-           content-start content-end
-           `(face ,face))
+          (add-face-text-property content-start content-end face 'append)
           (delete-region content-end span-end)
           (delete-region span-start content-start)
           (goto-char (+ span-start content-length)))))))
