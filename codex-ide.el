@@ -1936,6 +1936,7 @@ PARAMS describe the request."
         start-marker
         status-marker
         end-marker)
+    (codex-ide--clear-pending-output-indicator session)
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
             (moving (= (point) (point-max))))
