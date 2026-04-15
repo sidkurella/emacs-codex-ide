@@ -1777,6 +1777,7 @@ CHOICES is an alist of labels to returned values."
 (defun codex-ide--approval-result (kind value params)
   "Build the JSON-RPC result for approval KIND with VALUE and PARAMS."
   (pcase kind
+    ('elicitation value)
     ('permissions
      (if (eq value 'decline)
          '((permissions . []))
@@ -1931,6 +1932,14 @@ CHOICES is an alist of labels to returned values."
               (get-buffer-window buffer 0))
       (codex-ide--show-session-buffer session))))
 
+(defun codex-ide--notify-elicitation-required (session)
+  "Notify the user that SESSION requires elicitation input."
+  (let ((buffer (codex-ide-session-buffer session)))
+    (message "Codex input required in %s" (buffer-name buffer))
+    (when (or codex-ide-buffer-display-when-approval-required
+              (get-buffer-window buffer 0))
+      (codex-ide--show-session-buffer session))))
+
 (defun codex-ide--render-buffer-approval (session id kind title details choices params)
   "Render an inline approval block for SESSION request ID.
 KIND identifies the approval result shape.  TITLE, DETAILS, CHOICES, and
@@ -1975,6 +1984,279 @@ PARAMS describe the request."
     (setf (codex-ide-session-status session) "approval")
     (codex-ide--update-header-line session)
     (codex-ide--notify-approval-required session)))
+
+(defun codex-ide--insert-approval-action-button (label callback)
+  "Insert a button labeled LABEL that invokes CALLBACK."
+  (make-text-button
+   (point)
+   (progn (insert (format "[%s]" label)) (point))
+   'follow-link t
+   'help-echo label
+   'action (lambda (_button)
+             (funcall callback))))
+
+(defun codex-ide--elicitation-choice-options (field)
+  "Return button options for elicitation FIELD."
+  (pcase (plist-get field :type)
+    ("boolean"
+     (append
+      '(("true" . t)
+        ("false" . :json-false))
+      (unless (plist-get field :requiredp)
+        '(("skip" . :codex-ide-mcp-elicitation-omit)))))
+    (_
+     (let ((choices nil)
+           (values (plist-get field :enum))
+           (names (plist-get field :enum-names)))
+       (cl-mapc
+        (lambda (value label)
+          (push (cons (or label (format "%s" value)) value) choices))
+        values
+        (append names (make-list (max 0 (- (length values) (length names))) nil)))
+       (setq choices (nreverse choices))
+       (unless (plist-get field :requiredp)
+         (setq choices (append choices '(("skip" . :codex-ide-mcp-elicitation-omit)))))
+       choices))))
+
+(defun codex-ide--elicitation-choice-label (field value)
+  "Return a display label for elicitation FIELD VALUE."
+  (cond
+   ((or (null value)
+        (eq value :codex-ide-mcp-elicitation-omit))
+    (if (plist-get field :requiredp) "<unset>" "skip"))
+   ((equal (plist-get field :type) "boolean")
+    (if (eq value t) "true" "false"))
+   (t
+    (or (car (rassoc value (codex-ide--elicitation-choice-options field)))
+        (format "%s" value)))))
+
+(defun codex-ide--set-elicitation-choice-display (field label)
+  "Replace FIELD's current choice display text with LABEL."
+  (let ((start-marker (plist-get field :display-start-marker))
+        (end-marker (plist-get field :display-end-marker)))
+    (when (and (markerp start-marker)
+               (markerp end-marker)
+               (marker-buffer start-marker))
+      (with-current-buffer (marker-buffer start-marker)
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (marker-position start-marker))
+            (delete-region (marker-position start-marker)
+                           (marker-position end-marker))
+            (insert label)
+            (set-marker end-marker (point))))))))
+
+(defun codex-ide--set-elicitation-choice-value (session id field label value)
+  "Set FIELD for SESSION elicitation ID to VALUE and display LABEL."
+  (ignore session id)
+  (setcar (plist-get field :value-cell) value)
+  (codex-ide--set-elicitation-choice-display field label))
+
+(defun codex-ide--elicitation-field-raw-value (field)
+  "Return the current raw value for elicitation FIELD."
+  (pcase (plist-get field :input-kind)
+    ('choice (car (plist-get field :value-cell)))
+    (_
+     (let* ((start (marker-position (plist-get field :start-marker)))
+            (end (marker-position (plist-get field :end-marker)))
+            (text (buffer-substring-no-properties start end)))
+       (string-remove-suffix "\n" text)))))
+
+(defun codex-ide--submit-buffer-elicitation (session id)
+  "Validate and submit elicitation response for SESSION request ID."
+  (let* ((approval (gethash id (codex-ide--pending-approvals session)))
+         (fields (plist-get approval :fields))
+         (content nil))
+    (unless approval
+      (user-error "Codex elicitation already resolved"))
+    (condition-case err
+        (progn
+          (dolist (field fields)
+            (let ((value (codex-ide-mcp-elicitation-parse-field-value
+                          field
+                          (with-current-buffer (codex-ide-session-buffer session)
+                            (codex-ide--elicitation-field-raw-value field)))))
+              (unless (eq value :codex-ide-mcp-elicitation-omit)
+                (push (cons (plist-get field :name) value) content))))
+          (codex-ide--resolve-buffer-approval
+           session
+           id
+           `((action . "accept")
+             (content . ,(nreverse content)))
+           "submit"))
+      (error
+       (message "Codex elicitation error: %s" (error-message-string err))))))
+
+(defun codex-ide--render-elicitation-text-field (field writable-ranges)
+  "Render a writable text FIELD and extend WRITABLE-RANGES."
+  (let ((start nil)
+        (end nil)
+        (default (plist-get field :default)))
+    (insert "    ")
+    (setq start (copy-marker (point)))
+    (when default
+      (insert (format "%s" default)))
+    (insert "\n")
+    (setq end (copy-marker (point)))
+    (push (cons start end) writable-ranges)
+    (list
+     (append field
+             (list :input-kind 'text
+                   :start-marker start
+                   :end-marker end))
+     writable-ranges)))
+
+(defun codex-ide--render-elicitation-choice-field (session id field)
+  "Render a choice FIELD for SESSION elicitation ID."
+  (let* ((choices (codex-ide--elicitation-choice-options field))
+         (default (plist-get field :default))
+         (initial (if (or (member default (mapcar #'cdr choices))
+                          (and (null default)
+                               (not (plist-get field :requiredp))))
+                      default
+                    nil))
+         (value-cell (list initial))
+         rendered-field
+         display-start
+         display-end)
+    (insert "    Selected: ")
+    (setq display-start (copy-marker (point)))
+    (insert (codex-ide--elicitation-choice-label field initial))
+    (setq display-end (copy-marker (point) t))
+    (insert "\n")
+    (setq rendered-field
+          (append field
+                  (list :input-kind 'choice
+                        :value-cell value-cell
+                        :display-start-marker display-start
+                        :display-end-marker display-end)))
+    (dolist (choice choices)
+      (let ((label (car choice))
+            (value (cdr choice)))
+        (codex-ide--insert-approval-action-button
+         label
+         (lambda ()
+           (codex-ide--set-elicitation-choice-value
+            session id rendered-field label value)))
+        (insert " ")))
+    (insert "\n")
+    rendered-field))
+
+(defun codex-ide--insert-elicitation-field (session id field writable-ranges)
+  "Insert one elicitation FIELD and return updated state.
+SESSION and ID identify the owning request.  WRITABLE-RANGES collects text
+regions that should remain editable after rendering."
+  (codex-ide--insert-approval-label
+   (concat (codex-ide-mcp-elicitation-format-field-prompt field) ":"))
+  (insert "\n")
+  (let ((result
+         (if (or (plist-get field :enum)
+                 (equal (plist-get field :type) "boolean"))
+             (list (codex-ide--render-elicitation-choice-field session id field)
+                   writable-ranges)
+           (codex-ide--render-elicitation-text-field field writable-ranges))))
+    (insert "\n")
+    result))
+
+(defun codex-ide--render-buffer-elicitation (session id params)
+  "Render PARAMS as an inline elicitation block for SESSION request ID."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (request (codex-ide-mcp-elicitation-normalize-request params))
+         (mode (or (alist-get 'mode request) "form"))
+         (message (string-trim (or (alist-get 'message request) "")))
+         (schema (alist-get 'requestedSchema request))
+         (fields (and schema
+                      (codex-ide-mcp-elicitation-field-specs schema)))
+         (writable-ranges nil)
+         rendered-fields
+         start-marker
+         status-marker
+         end-marker)
+    (codex-ide--clear-pending-output-indicator session)
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)
+            (moving (= (point) (point-max))))
+        (codex-ide--ensure-output-spacing buffer)
+        (setq start-marker (copy-marker (point)))
+        (insert (propertize
+                 (codex-ide--output-separator-string)
+                 'face
+                 'codex-ide-output-separator-face))
+        (insert "\n")
+        (insert (propertize "[Input required]" 'face 'codex-ide-approval-header-face))
+        (insert "\n\n")
+        (codex-ide--insert-approval-label "Request: ")
+        (insert (codex-ide-mcp-elicitation-format-request request))
+        (insert "\n")
+        (unless (string-empty-p message)
+          (codex-ide--insert-approval-label "Message: ")
+          (insert message)
+          (insert "\n"))
+        (when-let ((url (alist-get 'url request)))
+          (codex-ide--insert-approval-label "URL: ")
+          (insert url)
+          (insert "\n"))
+        (insert "\n")
+        (dolist (field fields)
+          (pcase-let ((`(,rendered-field ,new-ranges)
+                       (codex-ide--insert-elicitation-field
+                        session id field writable-ranges)))
+            (push rendered-field rendered-fields)
+            (setq writable-ranges new-ranges)))
+        (setq rendered-fields (nreverse rendered-fields))
+        (pcase mode
+          ("url"
+           (codex-ide--insert-approval-action-button
+            "open and continue"
+            (lambda ()
+              (browse-url (alist-get 'url request))
+              (codex-ide--resolve-buffer-approval
+               session id '((action . "accept")) "open and continue")))
+           (insert "\n")
+           (codex-ide--insert-approval-action-button
+            "continue"
+            (lambda ()
+              (codex-ide--resolve-buffer-approval
+               session id '((action . "accept")) "continue")))
+           (insert "\n"))
+          (_
+           (codex-ide--insert-approval-action-button
+            "submit"
+            (lambda ()
+              (codex-ide--submit-buffer-elicitation session id)))
+           (insert "\n")))
+        (codex-ide--insert-approval-action-button
+         "decline"
+         (lambda ()
+           (codex-ide--resolve-buffer-approval
+            session id '((action . "decline")) "decline")))
+        (insert "\n")
+        (codex-ide--insert-approval-action-button
+         "cancel"
+         (lambda ()
+           (codex-ide--resolve-buffer-approval
+            session id '((action . "cancel")) "cancel")))
+        (insert "\n\n")
+        (setq status-marker (copy-marker (point)))
+        (setq end-marker (copy-marker (point) t))
+        (codex-ide--freeze-region (marker-position start-marker)
+                                  (marker-position end-marker))
+        (dolist (range writable-ranges)
+          (codex-ide--make-region-writable (marker-position (car range))
+                                           (marker-position (cdr range))))
+        (when moving
+          (goto-char (point-max)))))
+    (puthash id
+             (list :kind 'elicitation
+                   :params request
+                   :fields rendered-fields
+                   :start-marker start-marker
+                   :status-marker status-marker
+                   :end-marker end-marker)
+             (codex-ide--pending-approvals session))
+    (setf (codex-ide-session-status session) "approval")
+    (codex-ide--update-header-line session)
+    (codex-ide--notify-elicitation-required session)))
 
 (defun codex-ide--auto-approve-emacs-bridge-request-p (params)
   "Return non-nil when PARAMS should bypass user approval for the Emacs bridge."
@@ -2151,14 +2433,14 @@ PARAMS describe the request."
    0 nil
    (lambda ()
      (condition-case err
-         (let ((result (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-                           '((action . "accept"))
-                         (codex-ide-mcp-elicitation-handle-request params))))
-           (codex-ide-log-message
-            session
-            "Elicitation request resolved as %s"
-            (alist-get 'action result))
-           (codex-ide--jsonrpc-send-response session id result))
+         (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+             (let ((result '((action . "accept"))))
+               (codex-ide-log-message
+                session
+                "Elicitation request resolved as %s"
+                (alist-get 'action result))
+               (codex-ide--jsonrpc-send-response session id result))
+           (codex-ide--render-buffer-elicitation session id params))
        (error
         (codex-ide-log-message
          session
@@ -2177,11 +2459,6 @@ PARAMS describe the request."
     (pcase method
       ((or "elicitation/create"
            "mcpServer/elicitation/request")
-       (codex-ide--append-to-buffer
-        (codex-ide-session-buffer session)
-        (format "\n[%s]\n"
-                (codex-ide-mcp-elicitation-format-request params))
-        'shadow)
        (codex-ide--handle-elicitation-request session id params))
       ("item/commandExecution/requestApproval"
        (codex-ide--handle-command-approval session id params))
