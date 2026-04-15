@@ -23,17 +23,117 @@
 (defvar codex-ide-status-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map codex-ide-section-mode-map)
-    (define-key map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
-    (define-key map (kbd "l") #'codex-ide-status-mode-refresh)
-    (define-key map (kbd "RET") #'codex-ide-status-mode-visit-thing-at-point)
     map)
   "Keymap for `codex-ide-status-mode'.")
+
+(define-key codex-ide-status-mode-map (kbd "+") #'codex-ide)
+(define-key codex-ide-status-mode-map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
+(define-key codex-ide-status-mode-map (kbd "l") #'codex-ide-status-mode-refresh)
+(define-key codex-ide-status-mode-map (kbd "RET") #'codex-ide-status-mode-visit-thing-at-point)
 
 (define-derived-mode codex-ide-status-mode codex-ide-section-mode "Codex-Status"
   "Major mode for the Codex project status buffer."
   (setq-local hl-line-face 'codex-ide-session-list-current-row-face)
   (hl-line-mode 1)
   (setq-local revert-buffer-function #'codex-ide-status-mode-refresh))
+
+(defun codex-ide-status-mode--section-identity (section)
+  "Return a stable identity for SECTION across rerenders."
+  (pcase (codex-ide-section-type section)
+    ('buffers 'buffers)
+    ('threads 'threads)
+    ('buffer
+     (when-let* ((session (codex-ide-section-value section))
+                 (buffer (and (codex-ide-session-p session)
+                              (codex-ide-session-buffer session))))
+       (buffer-name buffer)))
+    ('thread
+     (let ((thread (codex-ide-section-value section)))
+       (or (alist-get 'id thread)
+           (alist-get 'name thread)
+           (alist-get 'preview thread))))
+    (_ (codex-ide-section-type section))))
+
+(defun codex-ide-status-mode--section-path (section)
+  "Return SECTION's path from the root section list."
+  (let (path)
+    (while section
+      (push (codex-ide-status-mode--section-identity section) path)
+      (setq section (codex-ide-section-parent section)))
+    path))
+
+(defun codex-ide-status-mode--map-sections (fn)
+  "Call FN for every status section in the current buffer."
+  (cl-labels ((walk (section)
+                (funcall fn section)
+                (dolist (child (codex-ide-section-children section))
+                  (walk child))))
+    (dolist (section codex-ide-section--root-sections)
+      (walk section))))
+
+(defun codex-ide-status-mode--find-section-by-path (path)
+  "Return the section identified by PATH, or nil when absent."
+  (cl-labels ((find-in (sections remaining)
+                (when-let ((key (car remaining)))
+                  (when-let ((section
+                              (cl-find-if
+                               (lambda (candidate)
+                                 (equal (codex-ide-status-mode--section-identity candidate)
+                                        key))
+                               sections)))
+                    (if (cdr remaining)
+                        (find-in (codex-ide-section-children section) (cdr remaining))
+                      section)))))
+    (find-in codex-ide-section--root-sections path)))
+
+(defun codex-ide-status-mode--section-containing-point (&optional pos)
+  "Return the deepest status section containing POS or point."
+  (setq pos (or pos (point)))
+  (cl-labels ((find-in (sections)
+                (cl-find-if
+                 #'identity
+                 (mapcar
+                  (lambda (section)
+                    (when (and (<= (codex-ide-section-heading-start section) pos)
+                               (< pos (codex-ide-section-end section)))
+                      (or (find-in (codex-ide-section-children section))
+                          section)))
+                  sections))))
+    (find-in codex-ide-section--root-sections)))
+
+(defun codex-ide-status-mode--capture-view-state ()
+  "Capture the current view state of the status buffer."
+  (let ((section (codex-ide-status-mode--section-containing-point))
+        (collapsed nil))
+    (codex-ide-status-mode--map-sections
+     (lambda (candidate)
+       (push (cons (codex-ide-status-mode--section-path candidate)
+                   (codex-ide-section-hidden candidate))
+             collapsed)))
+    `((collapsed . ,collapsed)
+      (point-path . ,(and section
+                          (codex-ide-status-mode--section-path section)))
+      (point-offset . ,(and section
+                            (- (point)
+                               (codex-ide-section-heading-start section))))
+      (point . ,(point)))))
+
+(defun codex-ide-status-mode--restore-view-state (state)
+  "Restore the status buffer view STATE after rerendering."
+  (dolist (entry (alist-get 'collapsed state))
+    (when-let ((section (codex-ide-status-mode--find-section-by-path (car entry))))
+      (if (cdr entry)
+          (codex-ide-section-hide section)
+        (codex-ide-section-show section))))
+  (if-let* ((path (alist-get 'point-path state))
+            (section (codex-ide-status-mode--find-section-by-path path)))
+      (let* ((offset (max 0 (or (alist-get 'point-offset state) 0)))
+             (target (min (+ (codex-ide-section-heading-start section) offset)
+                          (max (codex-ide-section-heading-start section)
+                               (1- (codex-ide-section-end section))))))
+        (goto-char target))
+    (goto-char (min (or (alist-get 'point state) (point-min))
+                    (point-max)))))
 
 (defun codex-ide-status-mode--actionable-section-at-point ()
   "Return the actionable status section at point.
@@ -493,7 +593,9 @@ Return nil when there is no agent reply."
   (interactive)
   (unless codex-ide-status-mode--directory
     (user-error "No Codex project is associated with this buffer"))
-  (codex-ide-status-mode--render-buffer codex-ide-status-mode--directory))
+  (let ((state (codex-ide-status-mode--capture-view-state)))
+    (codex-ide-status-mode--render-buffer codex-ide-status-mode--directory)
+    (codex-ide-status-mode--restore-view-state state)))
 
 ;;;###autoload
 (defun codex-ide-status ()

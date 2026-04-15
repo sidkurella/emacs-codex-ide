@@ -377,6 +377,7 @@ Refresh the current Codex status buffer.
 (autoload 'codex-ide-status "codex-ide-status-mode" "\
 Show the Codex status buffer for the current project." t)
 (register-definition-prefixes "codex-ide-status-mode" '("codex-ide-status-mode"))
+
 
 ;;; End of scraped data
 

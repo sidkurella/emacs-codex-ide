@@ -59,11 +59,17 @@
 (defvar codex-ide-section-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
-    (define-key map (kbd "<left-fringe> <mouse-1>") #'codex-ide-section-mouse-toggle-section)
-    (define-key map (kbd "<left-fringe> <mouse-2>") #'codex-ide-section-mouse-toggle-section)
-    (define-key map (kbd "TAB") #'codex-ide-section-toggle-at-point)
     map)
   "Parent keymap for modes derived from `codex-ide-section-mode'.")
+
+(define-key codex-ide-section-mode-map (kbd "<left-fringe> <mouse-1>") #'codex-ide-section-mouse-toggle-section)
+(define-key codex-ide-section-mode-map (kbd "<left-fringe> <mouse-2>") #'codex-ide-section-mouse-toggle-section)
+(define-key codex-ide-section-mode-map (kbd "TAB") #'codex-ide-section-toggle-at-point)
+(define-key codex-ide-section-mode-map (kbd "^") #'codex-ide-section-up)
+(define-key codex-ide-section-mode-map (kbd "p") #'codex-ide-section-backward)
+(define-key codex-ide-section-mode-map (kbd "n") #'codex-ide-section-forward)
+(define-key codex-ide-section-mode-map (kbd "M-p") #'codex-ide-section-backward-sibling)
+(define-key codex-ide-section-mode-map (kbd "M-n") #'codex-ide-section-forward-sibling)
 
 (define-derived-mode codex-ide-section-mode special-mode "Codex-Sections"
   "Parent major mode for buffers with Codex expandable sections."
@@ -86,6 +92,106 @@
   (or (get-text-property pos 'codex-ide-section)
       (and (> pos (point-min))
            (get-text-property (1- pos) 'codex-ide-section))))
+
+(defun codex-ide-section-containing-point (&optional pos)
+  "Return the deepest section containing POS or point."
+  (setq pos (or pos (point)))
+  (cl-labels ((find-in (sections)
+                (cl-find-if
+                 #'identity
+                 (mapcar
+                  (lambda (section)
+                    (when (and (<= (codex-ide-section-heading-start section) pos)
+                               (< pos (codex-ide-section-end section)))
+                      (or (find-in (codex-ide-section-children section))
+                          section)))
+                  sections))))
+    (find-in codex-ide-section--root-sections)))
+
+(defun codex-ide-section--current ()
+  "Return the current section for navigation."
+  (or (codex-ide-section-at-point)
+      (codex-ide-section-containing-point)
+      (user-error "No section at point")))
+
+(defun codex-ide-section--visible-p (section)
+  "Return non-nil when SECTION's heading is visible."
+  (not (invisible-p (codex-ide-section-heading-start section))))
+
+(defun codex-ide-section--all-sections ()
+  "Return all sections in depth-first order."
+  (let (sections)
+    (cl-labels ((walk (section)
+                  (push section sections)
+                  (dolist (child (codex-ide-section-children section))
+                    (walk child))))
+      (dolist (section codex-ide-section--root-sections)
+        (walk section)))
+    (nreverse sections)))
+
+(defun codex-ide-section--move-to (section)
+  "Move point to SECTION's heading start and return SECTION."
+  (goto-char (codex-ide-section-heading-start section))
+  section)
+
+(defun codex-ide-section--siblings (section)
+  "Return SECTION's siblings in display order."
+  (if-let ((parent (codex-ide-section-parent section)))
+      (codex-ide-section-children parent)
+    codex-ide-section--root-sections))
+
+(defun codex-ide-section-up ()
+  "Move point to the parent section heading."
+  (interactive)
+  (if-let ((parent (codex-ide-section-parent (codex-ide-section--current))))
+      (codex-ide-section--move-to parent)
+    (user-error "No parent section")))
+
+(defun codex-ide-section-forward ()
+  "Move point to the next visible section heading."
+  (interactive)
+  (let* ((current (codex-ide-section--current))
+         (sections (seq-filter #'codex-ide-section--visible-p
+                               (codex-ide-section--all-sections)))
+         (tail (memq current sections)))
+    (if-let ((next (cadr tail)))
+        (codex-ide-section--move-to next)
+      (user-error "No next section"))))
+
+(defun codex-ide-section-backward ()
+  "Move point to the previous visible section heading."
+  (interactive)
+  (let* ((current (codex-ide-section--current))
+         (sections (seq-filter #'codex-ide-section--visible-p
+                               (codex-ide-section--all-sections)))
+         (tail (memq current sections))
+         (previous (car (last (butlast sections (length tail))))))
+    (if previous
+        (codex-ide-section--move-to previous)
+      (user-error "No previous section"))))
+
+(defun codex-ide-section-forward-sibling ()
+  "Move point to the next visible sibling section heading."
+  (interactive)
+  (let* ((current (codex-ide-section--current))
+         (siblings (seq-filter #'codex-ide-section--visible-p
+                               (codex-ide-section--siblings current)))
+         (tail (memq current siblings)))
+    (if-let ((next (cadr tail)))
+        (codex-ide-section--move-to next)
+      (user-error "No next sibling section"))))
+
+(defun codex-ide-section-backward-sibling ()
+  "Move point to the previous visible sibling section heading."
+  (interactive)
+  (let* ((current (codex-ide-section--current))
+         (siblings (seq-filter #'codex-ide-section--visible-p
+                               (codex-ide-section--siblings current)))
+         (tail (memq current siblings))
+         (previous (car (last (butlast siblings (length tail))))))
+    (if previous
+        (codex-ide-section--move-to previous)
+      (user-error "No previous sibling section"))))
 
 (defun codex-ide-section--indicator-before-string (section)
   "Return the before-string used to indicate SECTION visibility."

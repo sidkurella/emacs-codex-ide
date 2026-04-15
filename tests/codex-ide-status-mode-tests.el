@@ -291,6 +291,112 @@
               (forward-line 1)
               (should-not (invisible-p (point))))))))))
 
+(ert-deftest codex-ide-status-plus-is-bound-to-start-a-new-session ()
+  (should (eq (lookup-key codex-ide-status-mode-map (kbd "+"))
+              #'codex-ide)))
+
+(ert-deftest codex-ide-status-refresh-preserves-expanded-and-collapsed-sections ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-alpha")
+                     (preview . "Alpha thread")
+                     (createdAt . 10)
+                     (updatedAt . 20)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (codex-ide-status-mode-test--set-session-buffer-with-response
+           session
+           '("Submitted prompt")
+           '("Assistant reply"))
+          (setf (codex-ide-session-thread-id session) "thread-alpha"
+                (codex-ide-session-status session) "idle")
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir))
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (goto-char (point-min))
+              (search-forward "Idle  *codex[alpha]*")
+              (beginning-of-line)
+              (codex-ide-section-toggle-at-point)
+              (search-forward "Threads (1)")
+              (beginning-of-line)
+              (codex-ide-section-toggle-at-point)
+              (codex-ide-status-mode-refresh)
+              (goto-char (point-min))
+              (search-forward "Idle  *codex[alpha]*")
+              (beginning-of-line)
+              (forward-line 1)
+              (should-not (invisible-p (point)))
+              (goto-char (point-min))
+              (search-forward "Threads (1)")
+              (beginning-of-line)
+              (forward-line 1)
+              (should (invisible-p (point))))))))))
+
+(ert-deftest codex-ide-status-refresh-preserves-point-relative-to-section ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-alpha")
+                     (preview . "Alpha thread")
+                     (createdAt . 10)
+                     (updatedAt . 20)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil)
+              (expected-offset nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (codex-ide-status-mode-test--set-session-buffer-with-response
+           session
+           '("Submitted prompt")
+           '("first line" "second line"))
+          (setf (codex-ide-session-thread-id session) "thread-alpha"
+                (codex-ide-session-status session) "idle")
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir))
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (goto-char (point-min))
+              (search-forward "Idle  *codex[alpha]*")
+              (beginning-of-line)
+              (codex-ide-section-toggle-at-point)
+              (search-forward "  second line")
+              (goto-char (match-beginning 0))
+              (setq expected-offset
+                    (- (point)
+                       (codex-ide-section-heading-start
+                        (codex-ide-status-mode--section-containing-point))))
+              (codex-ide-status-mode-refresh)
+              (should (eq (codex-ide-section-value
+                           (codex-ide-status-mode--section-containing-point))
+                          session))
+              (should (= (- (point)
+                            (codex-ide-section-heading-start
+                             (codex-ide-status-mode--section-containing-point)))
+                         expected-offset))
+              (should (string-match-p
+                       "second line"
+                       (buffer-substring-no-properties
+                        (line-beginning-position)
+                        (line-end-position)))))))))))
+
 (ert-deftest codex-ide-status-ret-visits-buffer-section-at-point ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
