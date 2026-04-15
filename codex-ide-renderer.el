@@ -311,6 +311,73 @@ inserted text."
    (codex-ide--restored-transcript-separator-string)
    'codex-ide-output-separator-face))
 
+(defun codex-ide--insert-pending-output-indicator (session &optional text)
+  "Insert a temporary pending-output indicator for SESSION."
+  (let ((buffer (codex-ide-session-buffer session))
+        (indicator-text (or text "Working...\n")))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (codex-ide--without-undo-recording
+          (let ((inhibit-read-only t)
+                (moving (= (point) (point-max)))
+                start
+                marker)
+            (goto-char (point-max))
+            (setq start (point))
+            (insert (propertize indicator-text 'face 'shadow))
+            (setq marker (copy-marker start))
+            (codex-ide--freeze-region start (point))
+            (codex-ide--session-metadata-put
+             session
+             :pending-output-indicator-marker
+             marker)
+            (codex-ide--session-metadata-put
+             session
+             :pending-output-indicator-text
+             indicator-text)
+            (when moving
+              (goto-char (point-max)))))))))
+
+(defun codex-ide--clear-pending-output-indicator (session)
+  "Remove SESSION's pending-output indicator, if it is still present."
+  (when-let ((marker (codex-ide--session-metadata-get
+                      session
+                      :pending-output-indicator-marker)))
+    (let ((buffer (marker-buffer marker))
+          (indicator-text
+           (or (codex-ide--session-metadata-get
+                session
+                :pending-output-indicator-text)
+               "Working...\n")))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (codex-ide--without-undo-recording
+            (let ((inhibit-read-only t)
+                  (moving (= (point) (point-max)))
+                  (start (marker-position marker)))
+              (when (and start
+                         (<= start (point-max)))
+                (save-excursion
+                  (goto-char start)
+                  (when (looking-at (regexp-quote indicator-text))
+                    (delete-region start (match-end 0)))))
+              (when moving
+                (goto-char (point-max)))))))
+      (set-marker marker nil))
+    (codex-ide--session-metadata-put
+     session
+     :pending-output-indicator-marker
+     nil)
+    (codex-ide--session-metadata-put
+     session
+     :pending-output-indicator-text
+     nil)))
+
+(defun codex-ide--replace-pending-output-indicator (session text)
+  "Replace SESSION's temporary pending-output indicator with TEXT."
+  (codex-ide--clear-pending-output-indicator session)
+  (codex-ide--insert-pending-output-indicator session text))
+
 (defun codex-ide--delete-input-overlay (session)
   "Delete the active input overlay for SESSION, if any."
   (when-let ((overlay (codex-ide-session-input-overlay session)))
@@ -1556,9 +1623,10 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
                         "No later prompt line")))
         (goto-char (match-end 0))))))
 
-(defun codex-ide--begin-turn-display (&optional session context-summary)
+(defun codex-ide--begin-turn-display (&optional session context-summary quiet)
   "Freeze the current prompt and show immediate pending output for SESSION.
-When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
+When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt.
+When QUIET is non-nil, do not refresh SESSION's header line."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
@@ -1586,9 +1654,11 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
             (setq spacing-start (point))
             (insert "\n\n")
             (codex-ide--freeze-region spacing-start (point))
+            (codex-ide--insert-pending-output-indicator session)
             (setf (codex-ide-session-output-prefix-inserted session) t
                   (codex-ide-session-status session) "running")
-            (codex-ide--update-header-line session)))
+            (unless quiet
+              (codex-ide--update-header-line session))))
         (codex-ide--discard-buffer-undo-history)))))
 
 (defun codex-ide--shell-command-string (command)
@@ -1802,6 +1872,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (when summary
         (unless (codex-ide-session-output-prefix-inserted session)
           (codex-ide--begin-turn-display session))
+        (codex-ide--clear-pending-output-indicator session)
         (codex-ide--ensure-output-spacing buffer)
         (codex-ide--append-agent-text
          buffer
@@ -1815,7 +1886,14 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
                :item item
                :summary summary
                :details-rendered t
-               :saw-output nil))))))
+               :saw-output nil)))
+      (when (and (not summary)
+                 (equal item-type "reasoning"))
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session nil t))
+        (codex-ide--replace-pending-output-indicator
+         session
+         "Reasoning...\n")))))
 
 (defun codex-ide--render-plan-delta (&optional session params)
   "Render a plan delta PARAMS for SESSION."
@@ -1826,6 +1904,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (unless (string-empty-p delta)
         (unless (codex-ide-session-output-prefix-inserted session)
           (codex-ide--begin-turn-display session))
+        (codex-ide--clear-pending-output-indicator session)
         (codex-ide--ensure-output-spacing buffer)
         (codex-ide--append-agent-text
          buffer
@@ -1843,6 +1922,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
       (unless (string-empty-p delta)
         (unless (codex-ide-session-output-prefix-inserted session)
           (codex-ide--begin-turn-display session))
+        (codex-ide--clear-pending-output-indicator session)
         (codex-ide--ensure-output-spacing buffer)
         (codex-ide--append-agent-text
          buffer
@@ -1923,6 +2003,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
                  (codex-ide-session-current-message-prefix-inserted session))
       (unless (codex-ide-session-output-prefix-inserted session)
         (codex-ide--begin-turn-display session))
+      (codex-ide--clear-pending-output-indicator session)
       (codex-ide--ensure-output-spacing buffer)
       (codex-ide--append-output-separator buffer)
       (codex-ide--append-agent-text buffer "\n")
@@ -1983,6 +2064,7 @@ When ITEM-ID is non-nil, render only when it matches SESSION's current message."
       (codex-ide-log-message session "%s" guidance))
     (setf (codex-ide-session-status session) "error")
     (codex-ide--update-header-line session)
+    (codex-ide--clear-pending-output-indicator session)
     (codex-ide--append-to-buffer buffer (format "\n%s\n" summary) (or face 'error))
     (unless (string-empty-p detail)
       (let ((codex-ide--current-agent-item-type "error"))
@@ -2006,6 +2088,7 @@ When ITEM-ID is non-nil, render only when it matches SESSION's current message."
         (codex-ide-session-output-prefix-inserted session) nil
         (codex-ide-session-item-states session) (make-hash-table :test 'equal)
         (codex-ide-session-status session) "idle")
+  (codex-ide--clear-pending-output-indicator session)
   (codex-ide--update-header-line session)
   (codex-ide--append-to-buffer
    (codex-ide-session-buffer session)
@@ -2028,6 +2111,7 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
           (codex-ide-session-item-states session) (make-hash-table :test 'equal)
           (codex-ide-session-interrupt-requested session) nil
           (codex-ide-session-status session) "idle")
+    (codex-ide--clear-pending-output-indicator session)
     (codex-ide--update-header-line session)
     (when closing-note
       (codex-ide--append-to-buffer buffer (format "\n%s\n" closing-note) 'warning))
