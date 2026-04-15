@@ -425,7 +425,65 @@
       (should buffer-undo-list)
       (codex-ide--begin-turn-display session)
       (should-not buffer-undo-list)
-      (should (string-match-p "^> submitted prompt\n\n\\'" (buffer-string))))))
+      (should (string-match-p "^> submitted prompt\n\nWorking\\.\\.\\.\n\\'"
+                              (buffer-string))))))
+
+(ert-deftest codex-ide-first-rendered-item-clears-pending-output-indicator ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (should (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . "echo hi")
+         (cwd . "/tmp")))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (string-match-p "\\* Ran echo hi" (buffer-string))))))
+
+(ert-deftest codex-ide-empty-reasoning-rewrites-pending-output-indicator ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "reason-1")
+         (type . "reasoning")
+         (summary . [])))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+      (codex-ide--ensure-agent-message-prefix session "msg-1")
+      (should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string))))))
+
+(ert-deftest codex-ide-finish-turn-clears-pending-output-indicator ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (should (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (codex-ide--finish-turn session)
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (goto-char (point-max))
+      (forward-line 0)
+      (should (looking-at-p "> $")))))
 
 (ert-deftest codex-ide-session-markdown-faces-survive-font-lock-attempts ()
   (with-temp-buffer
