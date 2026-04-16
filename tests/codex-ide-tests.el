@@ -474,7 +474,601 @@
          (command . "echo hi")
          (cwd . "/tmp")))
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
-      (should (string-match-p "\\* Ran echo hi" (buffer-string))))))
+      (should (string-match-p "\\* Ran command" (buffer-string)))
+      (should (string-match-p "  \\$ echo hi" (buffer-string))))))
+
+(ert-deftest codex-ide-command-execution-omits-shell-wrapper-in-detail ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["/bin/zsh" "-lc" "if true; then echo hi; fi"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p "\\* Ran command" buffer-text))
+        (should-not (string-match-p "/bin/zsh -lc" buffer-text))
+        (should (string-match-p "  \\$ if true; then echo hi; fi" buffer-text)))
+      (goto-char (point-min))
+      (search-forward "if true")
+      (should (memq 'font-lock-keyword-face
+                    (ensure-list (get-text-property
+                                  (match-beginning 0)
+                                  'face)))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-sed-file-read ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["/bin/zsh" "-lc" "sed -n '10,20p' codex-ide.el"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Read codex-ide\\.el (lines 10 to 20)"
+                 buffer-text))
+        (should-not (string-match-p "\\$ sed -n" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-numbered-sed-file-read ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["/bin/zsh" "-lc" "nl -ba codex-ide.el | sed -n '30,40p'"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Read codex-ide\\.el (lines 30 to 40)"
+                 buffer-text))
+        (should-not (string-match-p "\\$ nl -ba" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-string-shell-pipeline-read ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . "/bin/zsh -lc \"nl -ba codex-ide.el | sed -n '30,40p'\"")))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Read codex-ide\\.el (lines 30 to 40)"
+                 buffer-text))
+        (should-not (string-match-p "\\$ nl -ba" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-rg-search ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "render-item-start" "codex-ide-renderer.el"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide-renderer\\.el for \"render-item-start\""
+                 buffer-text))
+        (should-not (string-match-p "\\$ rg" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-quoted-rg-alternation ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . "rg -n \"summarizes-rg|summarizes-sed\" tests/codex-ide-tests.el codex-ide-renderer.el")))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched tests/codex-ide-tests\\.el and codex-ide-renderer\\.el for \"summarizes-rg|summarizes-sed\""
+                 buffer-text))
+        (should-not (string-match-p "\\$ rg" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-shell-wrapped-quoted-rg-alternation ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . "/bin/zsh -lc \"rg -n 'summarizes-rg|summarizes-sed' tests/codex-ide-tests.el codex-ide-renderer.el\"")))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched tests/codex-ide-tests\\.el and codex-ide-renderer\\.el for \"summarizes-rg|summarizes-sed\""
+                 buffer-text))
+        (should-not (string-match-p "\\$ rg" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-shell-wrapped-rg-search ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["/bin/zsh" "-lc" "rg --heading -n 'Ran command' tests"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched tests for \"Ran command\""
+                 buffer-text))
+        (should-not (string-match-p "/bin/zsh -lc" buffer-text))
+        (should-not (string-match-p "\\$ rg" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-rg-explicit-regexp ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-e" "foo bar" "codex-ide.el" "tests"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide\\.el and tests for \"foo bar\""
+                 buffer-text))
+        (should-not (string-match-p "\\$ rg" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-summarizes-rg-three-paths ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "foo bar" "codex-ide.el" "codex-ide-renderer.el" "tests"])))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide\\.el, codex-ide-renderer\\.el and tests for \"foo bar\""
+                 buffer-text))
+        (should-not (string-match-p "\\$ rg" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-rg-completion-reports-hit-count ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "needle" "codex-ide.el"])))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/commandExecution/outputDelta")
+         (params . ((itemId . "call-1")
+                    (delta . "codex-ide.el:10:needle\ncodex-ide.el:20:needle\n")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide\\.el for \"needle\""
+                 buffer-text))
+        (should (string-match-p "  └ found 2 hits" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-streams-output-and-folds-on-completion ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["echo" "hello"])))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/commandExecution/outputDelta")
+         (params . ((itemId . "call-1")
+                    (delta . "hello\nworld\n")))))
+      (should (string-match-p "    hello\n    world" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "output: 2 lines, streaming")
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-command-output-overlay-property)))
+        (should (overlayp overlay))
+        (should-not (overlay-get overlay 'invisible))
+        (codex-ide--render-item-completion
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (status . "completed")
+           (exitCode . 0)))
+        (should (overlay-get overlay 'invisible))
+        (should (overlay-get overlay :folded))
+        (should (string-match-p "output: 2 lines (RET to expand)"
+                                (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-face-extends-line-background ()
+  (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
+              t)))
+
+(ert-deftest codex-ide-command-output-can-start-folded-while-streaming ()
+  (let ((codex-ide-command-output-fold-on-start t))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (command . ["echo" "hello"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "hello\n")))))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "world\n")))))
+        (goto-char (point-min))
+        (search-forward "output: 2 lines, streaming (RET to expand)")
+        (let ((overlay (get-char-property
+                        (match-beginning 0)
+                        codex-ide-command-output-overlay-property)))
+          (should (overlayp overlay))
+          (should (overlay-get overlay :folded))
+          (should (overlay-get overlay 'invisible))
+          (should (string-match-p "    hello\n    world"
+                                  (buffer-string)))
+          (codex-ide-toggle-command-output-at-point (match-beginning 0))
+          (should-not (overlay-get overlay 'invisible))
+          (should (string-match-p "output: 2 lines, streaming (RET to fold)"
+                                  (buffer-string))))))))
+
+(ert-deftest codex-ide-command-execution-keeps-output-before-start ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--handle-notification
+       session
+       '((method . "item/commandExecution/outputDelta")
+         (params . ((itemId . "call-1")
+                    (delta . "early 1\nearly 2\n")))))
+      (should-not (string-match-p "early 1" (buffer-string)))
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["sh" "-c" "printf output"])))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/commandExecution/outputDelta")
+         (params . ((itemId . "call-1")
+                    (delta . "late 3\n")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)))
+      (goto-char (point-min))
+      (search-forward "output: 3 lines (RET to expand)")
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-command-output-overlay-property)))
+        (should (overlayp overlay))
+        (should (overlay-get overlay 'invisible))
+        (should (string-match-p
+                 "    early 1\n    early 2\n    late 3\n"
+                 (buffer-string)))))))
+
+(ert-deftest codex-ide-command-execution-renders-aggregated-output-when-no-stream ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["echo" "hello"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "hello\nworld\n")))
+      (goto-char (point-min))
+      (search-forward "output: 2 lines (RET to expand)")
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-command-output-overlay-property)))
+        (should (overlayp overlay))
+        (should (overlay-get overlay 'invisible))
+        (should (string-match-p "    hello\n    world" (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-does-not-fold-following-assistant-message ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["sh" "-c" "echo start; sleep 1; echo end"])))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/commandExecution/outputDelta")
+         (params . ((itemId . "call-1")
+                    (delta . "start\n")))))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/agentMessage/delta")
+         (params . ((itemId . "msg-1")
+                    (delta . "assistant while command runs\n")))))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/commandExecution/outputDelta")
+         (params . ((itemId . "call-1")
+                    (delta . "end\n")))))
+      (goto-char (point-min))
+      (search-forward "output: 2 lines, streaming")
+      (let* ((overlay (get-char-property
+                       (match-beginning 0)
+                       codex-ide-command-output-overlay-property))
+             (output-text (buffer-substring-no-properties
+                           (overlay-start overlay)
+                           (overlay-end overlay))))
+        (should (overlayp overlay))
+        (should (string-match-p "    start\n    end\n" output-text))
+        (should-not (string-match-p "assistant while command runs" output-text))
+        (codex-ide--render-item-completion
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (status . "completed")
+           (exitCode . 0)))
+        (should (overlay-get overlay 'invisible))
+        (search-forward "assistant while command runs")
+        (should-not (get-char-property (match-beginning 0) 'invisible))
+        (should-not (get-char-property
+                     (match-beginning 0)
+                     codex-ide-command-output-overlay-property))))))
+
+(ert-deftest codex-ide-command-output-ret-toggles-folded-block ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["echo" "hello"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "hello\nworld\n")))
+      (goto-char (point-min))
+      (search-forward "output: 2 lines")
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-command-output-overlay-property))
+            (keymap (get-char-property (match-beginning 0) 'keymap)))
+        (should (overlay-get overlay 'invisible))
+        (should (eq (lookup-key keymap (kbd "RET"))
+                    #'codex-ide-toggle-command-output-at-point))
+        (codex-ide-toggle-command-output-at-point)
+        (should-not (overlay-get overlay 'invisible))
+        (should (string-match-p "output: 2 lines (RET to fold)"
+                                (buffer-string)))
+        (codex-ide-toggle-command-output-at-point)
+        (should (overlay-get overlay 'invisible))
+        (should (string-match-p "output: 2 lines (RET to expand)"
+                                (buffer-string)))))))
+
+(ert-deftest codex-ide-command-execution-rg-completion-counts-aggregated-output ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "needle" "codex-ide.el"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "codex-ide.el:10:needle\ncodex-ide.el:20:needle\n")))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide\\.el for \"needle\""
+                 buffer-text))
+        (should (string-match-p "  └ found 2 hits" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-rg-completion-without-output-omits-hit-count ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "needle" "codex-ide.el"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide\\.el for \"needle\""
+                 buffer-text))
+        (should-not (string-match-p "  └ found 0 hits" buffer-text))
+        (should-not (string-match-p "  └ found [0-9]+ hits" buffer-text))))))
+
+(ert-deftest codex-ide-command-execution-rg-no-match-reports-zero-hits ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "missing" "codex-ide.el"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "failed")
+         (exitCode . 1)))
+      (let ((buffer-text (buffer-string)))
+        (should (string-match-p
+                 "\\* Searched codex-ide\\.el for \"missing\""
+                 buffer-text))
+        (should (string-match-p "  └ found 0 hits" buffer-text))
+        (should-not (string-match-p "failed with exit code 1" buffer-text))))))
 
 (ert-deftest codex-ide-empty-reasoning-rewrites-pending-output-indicator ()
   (with-temp-buffer
@@ -1643,6 +2237,35 @@
             (backward-char 1)
             (should-not (button-at (point))))
           (should (= (length (codex-ide-test-process-sent-strings process)) 1)))))))
+
+(ert-deftest codex-ide-command-approval-strips-shell-wrapper-without-summarizing ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model "gpt-5.4"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-current-turn-id session) "turn-approval-1"
+                (codex-ide-session-status session) "running")
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer) (selected-window)))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-command-approval
+             session
+             43
+             '((command . "/bin/zsh -lc \"rg -n 'summarizes-rg|summarizes-sed' tests/codex-ide-tests.el codex-ide-renderer.el\"")
+               (reason . "inspect matches"))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p
+                       "    rg -n 'summarizes-rg|summarizes-sed' tests/codex-ide-tests\\.el codex-ide-renderer\\.el\n\n"
+                       text))
+              (should-not (string-match-p "/bin/zsh -lc" text))
+              (should-not (string-match-p "Searched 2 paths" text)))))))))
 
 (ert-deftest codex-ide-command-approval-does-not-display-nonvisible-buffer-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
