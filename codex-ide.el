@@ -2288,7 +2288,8 @@ regions that should remain editable after rendering."
   (codex-ide--schedule-interactive-request
    session
    (lambda ()
-     (let* ((command (or (alist-get 'command params) "unknown command"))
+     (let* ((command (codex-ide--display-command-string
+                      (or (alist-get 'command params) "unknown command")))
             (choices (codex-ide--command-approval-choices params)))
        (codex-ide--render-buffer-approval
         session
