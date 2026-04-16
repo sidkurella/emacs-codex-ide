@@ -364,9 +364,6 @@
 (ert-deftest codex-ide-session-mode-disables-font-lock-jit-lock ()
   (with-temp-buffer
     (codex-ide-session-mode)
-    (should (eq font-lock-function #'ignore))
-    (should-not font-lock-defaults)
-    (should-not font-lock-keywords)
     (should-not font-lock-mode)
     (should-not jit-lock-functions)
     (font-lock-mode 1)

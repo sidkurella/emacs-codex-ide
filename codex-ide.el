@@ -249,17 +249,11 @@ start, completion, errors, and other lifecycle events are still logged."
 
 (defun codex-ide--disable-session-font-lock ()
   "Disable buffer font-lock machinery for Codex transcript buffers."
-  (setq-local font-lock-defaults nil)
-  (setq-local font-lock-keywords nil)
-  (setq-local font-lock-function #'ignore)
-  (setq-local jit-lock-functions nil)
-  (when (boundp 'font-lock-extra-managed-props)
-    (setq-local font-lock-extra-managed-props nil))
   (when (fboundp 'jit-lock-mode)
-    (jit-lock-mode -1))
+    ;; For `jit-lock-mode', nil rather than -1 is how you disable.
+    (jit-lock-mode nil))
   (when (fboundp 'font-lock-mode)
-    (font-lock-mode -1))
-  (setq-local jit-lock-functions nil))
+    (font-lock-mode -1)))
 
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
