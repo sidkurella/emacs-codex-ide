@@ -64,7 +64,7 @@ Press RET on the output header to expand or fold the block."
   :type 'boolean
   :group 'codex-ide)
 
-(defcustom codex-ide-command-output-max-rendered-lines 100
+(defcustom codex-ide-command-output-max-rendered-lines 10
   "Maximum command output lines to insert into the transcript buffer.
 
 The full output still contributes to the output line count and item completion
